@@ -1,0 +1,296 @@
+// Resource validation task: validates JSON syntax and cross-references in assets.
+//
+// Required project properties (gradle.properties):
+//   archives_name - The mod's archive name (used as namespace in asset paths)
+//
+// Optional project properties:
+//   shared_resource_dirs - Comma-separated list of shared resource directories
+//                          (relative to project root, e.g., "common/shared/src/main/resources")
+//                          If not set, auto-detects directories under common/ matching shared*/src/main/resources
+//   entity_id_file       - Path to the entity ID enum file (relative to project root)
+//   item_id_file         - Path to the item ID enum file (relative to project root)
+//   excluded_entities    - Comma-separated list of technical entity IDs that don't need translations
+//   translation_versions - Comma-separated list of versions to validate translations for
+//   translation_hotfix_versions - Comma-separated "hotfix=base" pairs for version module mapping
+
+import groovy.json.JsonSlurper
+import groovy.json.JsonException
+
+tasks.register('validateResources') {
+    group = 'verification'
+    description = 'Validates JSON syntax and resource cross-references in assets'
+
+    doLast {
+        def archivesName = project.property('archives_name').toString()
+
+        def sharedDirs = []
+        if (project.hasProperty('shared_resource_dirs')) {
+            project.property('shared_resource_dirs').toString().split(',').each {
+                sharedDirs.add(file("${rootProject.projectDir}/${it.trim()}"))
+            }
+        } else {
+            file("${rootProject.projectDir}/common").listFiles()?.findAll {
+                it.isDirectory() && it.name.startsWith('shared') && file("${it}/src/main/resources").exists()
+            }?.sort()?.each {
+                sharedDirs.add(file("${it}/src/main/resources"))
+            }
+        }
+        def errors = []
+
+        // 1. JSON syntax check across all shared directories
+        logger.lifecycle("Checking JSON syntax...")
+        def jsonSlurper = new JsonSlurper()
+        int totalJsonFiles = 0
+        sharedDirs.each { resourceDir ->
+            if (!resourceDir.exists()) return
+            def jsonFiles = fileTree(dir: resourceDir, includes: ['**/*.json'])
+            jsonFiles.each { File jsonFile ->
+                try {
+                    jsonSlurper.parseText(jsonFile.text)
+                } catch (JsonException e) {
+                    def relPath = resourceDir.toPath().relativize(jsonFile.toPath()).toString()
+                    errors << "JSON syntax error in ${relPath}: ${e.message}"
+                } catch (Exception e) {
+                    def relPath = resourceDir.toPath().relativize(jsonFile.toPath()).toString()
+                    errors << "Failed to parse ${relPath}: ${e.message}"
+                }
+            }
+            totalJsonFiles += jsonFiles.files.size()
+        }
+        logger.lifecycle("  Checked ${totalJsonFiles} JSON files across ${sharedDirs.size()} shared directories")
+
+        // 2. Blockstate -> model reference check (blockstates and block models are in the first shared dir)
+        logger.lifecycle("Checking blockstate -> model references...")
+        def assetsDir = file("${sharedDirs[0]}/assets/${archivesName}")
+        def blockstatesDir = file("${assetsDir}/blockstates")
+        def modelsBlockDir = file("${assetsDir}/models/block")
+        int blockstateRefs = 0
+        if (blockstatesDir.exists()) {
+            blockstatesDir.eachFileMatch(~/.+\.json/) { File bsFile ->
+                try {
+                    def bs = jsonSlurper.parseText(bsFile.text)
+                    def models = extractModelReferences(bs)
+                    models.each { String modelRef ->
+                        if (modelRef.startsWith("${archivesName}:block/")) {
+                            def modelName = modelRef.replace("${archivesName}:block/", "")
+                            def modelFile = new File(modelsBlockDir, "${modelName}.json")
+                            if (!modelFile.exists()) {
+                                errors << "Blockstate ${bsFile.name} references model '${modelRef}' but ${modelFile.name} does not exist"
+                            }
+                            blockstateRefs++
+                        }
+                    }
+                } catch (Exception e) {
+                    // JSON syntax errors already caught above
+                }
+            }
+        }
+        logger.lifecycle("  Checked ${blockstateRefs} blockstate -> model references")
+
+        // 3. Model -> texture reference check across all shared directories
+        logger.lifecycle("Checking model -> texture references...")
+        // Collect all textures from all shared directories
+        def allTextures = [] as Set
+        sharedDirs.each { resourceDir ->
+            def texturesDir = file("${resourceDir}/assets/${archivesName}/textures")
+            if (texturesDir.exists()) {
+                fileTree(dir: texturesDir, includes: ['**/*.png']).each { File textureFile ->
+                    def relPath = texturesDir.toPath().relativize(textureFile.toPath()).toString().replace('.png', '')
+                    allTextures << relPath
+                }
+            }
+        }
+        int textureRefs = 0
+        sharedDirs.each { resourceDir ->
+            def modelsDir = file("${resourceDir}/assets/${archivesName}/models")
+            if (modelsDir.exists()) {
+                fileTree(dir: modelsDir, includes: ['**/*.json']).each { File modelFile ->
+                    try {
+                        def model = jsonSlurper.parseText(modelFile.text)
+                        if (model instanceof Map && model.textures instanceof Map) {
+                            model.textures.each { key, value ->
+                                if (value instanceof String && value.startsWith("${archivesName}:")) {
+                                    def texturePath = value.replace("${archivesName}:", "")
+                                    if (!allTextures.contains(texturePath)) {
+                                        def modelRelative = modelsDir.toPath().relativize(modelFile.toPath()).toString()
+                                        errors << "Model ${modelRelative} references texture '${value}' but ${texturePath}.png does not exist in any shared directory"
+                                    }
+                                    textureRefs++
+                                }
+                                // Skip minecraft: prefixed references
+                            }
+                        }
+                    } catch (Exception e) {
+                        // JSON syntax errors already caught above
+                    }
+                }
+            }
+        }
+        logger.lifecycle("  Checked ${textureRefs} model -> texture references")
+
+        // Report results
+        if (errors.isEmpty()) {
+            logger.lifecycle("Resource validation passed: all references are valid.")
+        } else {
+            errors.each { logger.error("  ERROR: ${it}") }
+            throw new GradleException("Resource validation failed with ${errors.size()} error(s)")
+        }
+    }
+}
+
+// Cross-version translation validation task
+// Validates that all registered entities/items have translations in all versions
+tasks.register('validateTranslations') {
+    group = 'verification'
+    description = 'Validates that translation keys exist across all Minecraft versions'
+
+    doLast {
+        def archivesName = project.property('archives_name').toString()
+
+        def versions = []
+        if (project.hasProperty('translation_versions')) {
+            versions = project.property('translation_versions').toString().split(',').collect { it.trim() }
+        } else {
+            // Default: use supported_mc_versions if available
+            if (project.hasProperty('supported_mc_versions')) {
+                versions = project.property('supported_mc_versions').toString().split(',').collect { it.trim() }
+            }
+        }
+
+        // Map hotfix versions to their base module version
+        def moduleVersionMap = [:]
+        if (project.hasProperty('translation_hotfix_versions')) {
+            project.property('translation_hotfix_versions').toString().split(',').each {
+                def parts = it.trim().split('=')
+                moduleVersionMap[parts[0]] = parts[1]
+            }
+        } else if (project.hasProperty('hotfix_mc_versions')) {
+            project.property('hotfix_mc_versions').toString().split(',').each {
+                def parts = it.trim().split('=')
+                moduleVersionMap[parts[0]] = parts[1]
+            }
+        }
+
+        def jsonSlurper = new JsonSlurper()
+        def errors = []
+
+        // Parse entity ID file
+        def entityIds = []
+        if (project.hasProperty('entity_id_file')) {
+            def entityIdFile = file("${rootProject.projectDir}/${project.property('entity_id_file')}")
+            entityIds = extractEnumValues(entityIdFile)
+        }
+
+        // Parse item ID file
+        def itemIds = []
+        if (project.hasProperty('item_id_file')) {
+            def itemIdFile = file("${rootProject.projectDir}/${project.property('item_id_file')}")
+            itemIds = extractEnumValues(itemIdFile)
+        }
+
+        // Technical entities that don't need translations
+        def excludedEntities = []
+        if (project.hasProperty('excluded_entities')) {
+            excludedEntities = project.property('excluded_entities').toString().split(',').collect { it.trim() }
+        }
+
+        logger.lifecycle("Validating translations across ${versions.size()} versions...")
+        logger.lifecycle("  Found ${entityIds.size()} entities and ${itemIds.size()} items to validate")
+
+        versions.each { version ->
+            def moduleVersion = moduleVersionMap.getOrDefault(version, version)
+            // Search for lang file in version-specific dir first, then shared directories
+            def langFile = file("${rootProject.projectDir}/common/${moduleVersion}/src/main/resources/assets/${archivesName}/lang/en_us.json")
+            if (!langFile.exists()) {
+                // Try shared directories in order: auto-detect from common/ directory
+                def sharedLangDirs = []
+                file("${rootProject.projectDir}/common").listFiles()?.findAll {
+                    it.isDirectory() && it.name.startsWith('shared')
+                }?.sort()?.reverse()?.each {
+                    sharedLangDirs.add(it.name)
+                }
+                for (sharedDir in sharedLangDirs) {
+                    def candidate = file("${rootProject.projectDir}/common/${sharedDir}/src/main/resources/assets/${archivesName}/lang/en_us.json")
+                    if (candidate.exists()) {
+                        langFile = candidate
+                        break
+                    }
+                }
+            }
+            if (!langFile.exists()) {
+                errors << "[${version}] Language file not found in any shared directory"
+                return
+            }
+
+            def langMap = jsonSlurper.parseText(langFile.text)
+
+            // Check entity translations
+            entityIds.each { entityId ->
+                if (excludedEntities.contains(entityId)) return
+                // Use toString() to convert GString to String for proper Map key lookup
+                def key = "entity.${archivesName}.${entityId}".toString()
+                if (!langMap.containsKey(key)) {
+                    errors << "[${version}] Missing entity translation: ${key}"
+                }
+            }
+
+            // Check spawn egg translations
+            entityIds.each { entityId ->
+                if (excludedEntities.contains(entityId)) return
+                // Use toString() to convert GString to String for proper Map key lookup
+                def key = "item.${archivesName}.${entityId}_spawn_egg".toString()
+                def spawnEggItemId = "${entityId}_spawn_egg".toString()
+                // Only check if the spawn egg item exists in the item ID list
+                if (itemIds.contains(spawnEggItemId)) {
+                    if (!langMap.containsKey(key)) {
+                        errors << "[${version}] Missing spawn egg translation: ${key}"
+                    }
+                }
+            }
+        }
+
+        // Report results
+        if (errors.isEmpty()) {
+            logger.lifecycle("Cross-version translation validation passed.")
+        } else {
+            logger.lifecycle("")
+            errors.each { logger.error("  ERROR: ${it}") }
+            throw new GradleException("Translation validation failed with ${errors.size()} error(s)")
+        }
+    }
+}
+
+// Extract enum values from a ModXxxId.java file
+// Matches patterns like: ENTITY_NAME("entity_name"),
+def extractEnumValues(File file) {
+    def ids = []
+    if (!file.exists()) {
+        return ids
+    }
+    def content = file.text
+    def pattern = ~/(\w+)\s*\(\s*"([^"]+)"\s*\)/
+    def matcher = pattern.matcher(content)
+    while (matcher.find()) {
+        ids << matcher.group(2)  // The string value in parentheses
+    }
+    return ids
+}
+
+// Extract all model references from a blockstate JSON structure
+def extractModelReferences(Object node) {
+    def models = []
+    if (node instanceof Map) {
+        node.each { key, value ->
+            if (key == "model" && value instanceof String) {
+                models << value
+            } else {
+                models.addAll(extractModelReferences(value))
+            }
+        }
+    } else if (node instanceof List) {
+        node.each { item ->
+            models.addAll(extractModelReferences(item))
+        }
+    }
+    return models
+}
