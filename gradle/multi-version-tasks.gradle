@@ -1,0 +1,702 @@
+// Multi-version build and run tasks for Minecraft mod development.
+// This script defines custom Gradle tasks for building and running the mod
+// across multiple Minecraft versions.
+//
+// Required project properties (gradle.properties):
+//   supported_mc_versions  - Comma-separated list of all supported MC versions
+//   release_project_name   - (optional) Project display name for task groups (defaults to project.name)
+//
+// Optional project properties:
+//   hotfix_mc_versions     - Comma-separated "hotfix=base" pairs (e.g., "1.21.3=1.21.2")
+//   fabric_only_mc_versions - Comma-separated versions that only support Fabric (no NeoForge)
+
+// --- Configuration ---
+def supportedVersions = project.property('supported_mc_versions').toString().split(',').collect { it.trim() }
+def hotfixVersions = [:]
+if (project.hasProperty('hotfix_mc_versions')) {
+    project.property('hotfix_mc_versions').toString().split(',').each {
+        def parts = it.trim().split('=')
+        hotfixVersions[parts[0]] = parts[1]
+    }
+}
+def releaseVersions = supportedVersions.findAll { !hotfixVersions.containsKey(it) }
+
+// Versions that only support Fabric (no NeoForge)
+def fabricOnlyVersions = []
+if (project.hasProperty('fabric_only_mc_versions')) {
+    fabricOnlyVersions = project.property('fabric_only_mc_versions').toString().split(',').collect { it.trim() }
+}
+
+def taskGroupName = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' build'
+def taskGroupTest = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' test'
+def taskGroupRun = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' run'
+def taskGroupVerification = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' verification'
+
+// ============================================================
+// Clean Tasks
+// ============================================================
+
+// Register clean task for each supported version
+supportedVersions.each { version ->
+    def versionSuffix = version.replace('.', '_')
+
+    tasks.register("clean${versionSuffix}") {
+        group = taskGroupName
+        description = "Clean build outputs for Minecraft ${version}"
+
+        doLast {
+            project.exec {
+                commandLine './gradlew', 'clean', "-Ptarget_mc_version=${version}"
+            }
+        }
+    }
+}
+
+/**
+ * Clean for all supported Minecraft versions
+ * Usage: ./gradlew cleanAll
+ *
+ * Note: Hotfix versions are excluded because they share modules with their base version.
+ * Cleaning the base version also cleans the modules used by hotfix versions.
+ */
+tasks.register('cleanAll') {
+    group = taskGroupName
+    description = "Clean build outputs for all supported Minecraft versions (${releaseVersions.join(', ')})"
+
+    doLast {
+        releaseVersions.each { version ->
+            logger.lifecycle(">>> Cleaning for Minecraft ${version}...")
+
+            project.exec {
+                commandLine './gradlew', 'clean', "-Ptarget_mc_version=${version}"
+            }
+        }
+
+        // Clean IDE-generated bin/ directories that can interfere with builds/tests
+        // (e.g., IntelliJ/Eclipse output directories with unprocessed placeholders)
+        def subprojects = []
+        releaseVersions.each { version ->
+            subprojects.add("common/${version}")
+            subprojects.add("fabric/${version}")
+            if (!fabricOnlyVersions.contains(version)) {
+                subprojects.add("neoforge/${version}")
+            }
+        }
+        def deletedCount = 0
+        subprojects.each { subdir ->
+            def binDir = file("${subdir}/bin")
+            if (binDir.exists()) {
+                logger.lifecycle(">>> Deleting IDE-generated directory: ${binDir}")
+                delete binDir
+                deletedCount++
+            }
+        }
+        if (deletedCount > 0) {
+            logger.lifecycle(">>> Deleted ${deletedCount} IDE-generated bin/ directories")
+        }
+
+        // Clean Architectury Transformer runtime caches in run directories
+        // These caches can cause "Unresolved compilation problems" errors when
+        // stale transformed classes remain after code changes
+        def runDirs = []
+        releaseVersions.each { version ->
+            runDirs.add("fabric/${version}/run")
+            if (!fabricOnlyVersions.contains(version)) {
+                runDirs.add("neoforge/${version}/run")
+            }
+        }
+        def transformerDeletedCount = 0
+        runDirs.each { runDir ->
+            def transformerDir = file("${runDir}/.architectury-transformer")
+            if (transformerDir.exists()) {
+                logger.lifecycle(">>> Deleting Architectury Transformer cache: ${transformerDir}")
+                delete transformerDir
+                transformerDeletedCount++
+            }
+        }
+        if (transformerDeletedCount > 0) {
+            logger.lifecycle(">>> Deleted ${transformerDeletedCount} Architectury Transformer cache directories")
+        }
+
+        logger.lifecycle('')
+        logger.lifecycle('All versions cleaned successfully.')
+    }
+}
+
+// ============================================================
+// Build Tasks
+// ============================================================
+
+// Register build task for each supported version
+supportedVersions.each { version ->
+    def versionSuffix = version.replace('.', '_')
+
+    tasks.register("build${versionSuffix}") {
+        group = taskGroupName
+        description = "Build mod for Minecraft ${version}"
+
+        doFirst {
+            logger.lifecycle('')
+            logger.lifecycle('====================================')
+            logger.lifecycle("Building for Minecraft ${version}...")
+            logger.lifecycle('====================================')
+            logger.lifecycle('')
+        }
+
+        doLast {
+            project.exec {
+                commandLine './gradlew', 'clean', 'build', "-Ptarget_mc_version=${version}", '-x', 'test'
+            }
+        }
+    }
+}
+
+/**
+ * Build for all supported Minecraft versions (for release)
+ * Usage: ./gradlew buildAll
+ *
+ * Note: Hotfix versions are excluded because they share modules with their base version.
+ * The base version JAR files are compatible with hotfix versions.
+ * Use gameTestAll to verify hotfix version runtime compatibility.
+ */
+tasks.register('buildAll') {
+    group = taskGroupName
+    description = "Build mod for all supported Minecraft versions (${releaseVersions.join(', ')}) - for release"
+
+    doFirst {
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Building for ALL supported Minecraft versions...')
+        logger.lifecycle("Versions: ${releaseVersions.join(', ')}")
+        if (!hotfixVersions.isEmpty()) {
+            logger.lifecycle("(${hotfixVersions.keySet().join(', ')} excluded - uses base version JAR files)")
+        }
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+    }
+
+    doLast {
+        def maxParallel = 3
+        def passed = java.util.Collections.synchronizedList([])
+        def failed = java.util.Collections.synchronizedList([])
+
+        def gradlew = new File(projectDir, 'gradlew').absolutePath
+        def logDir = new File(projectDir, 'build')
+        logDir.mkdirs()
+
+        def executor = java.util.concurrent.Executors.newFixedThreadPool(maxParallel)
+        def futures = []
+
+        releaseVersions.each { version ->
+            def future = executor.submit({
+                logger.lifecycle(">>> Building for Minecraft ${version}...")
+
+                def logFile = new File(logDir, "build-${version}.log")
+                try {
+                    def pb = new ProcessBuilder(
+                        gradlew, 'clean', 'build',
+                        "-Ptarget_mc_version=${version}", '-x', 'test',
+                        '--project-cache-dir', ".gradle/build-${version}",
+                        '--no-parallel'
+                    )
+                    pb.directory(projectDir)
+                    pb.redirectErrorStream(true)
+                    pb.redirectOutput(logFile)
+
+                    def process = pb.start()
+                    def exitCode = process.waitFor()
+
+                    if (exitCode == 0) {
+                        passed.add(version)
+                        logger.lifecycle("SUCCESS: Minecraft ${version}")
+                    } else {
+                        failed.add(version)
+                        logger.error("FAILED: Minecraft ${version} (see ${logFile.absolutePath})")
+                    }
+                } catch (Exception e) {
+                    failed.add(version)
+                    logger.error("FAILED: Minecraft ${version} (${e.message})")
+                }
+            } as Runnable)
+            futures.add(future)
+        }
+
+        // Wait for all builds to complete
+        futures.each { it.get() }
+        executor.shutdown()
+
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Build Summary:')
+        logger.lifecycle('====================================================')
+
+        if (failed.isEmpty()) {
+            logger.lifecycle('All versions built successfully!')
+            releaseVersions.each { version ->
+                logger.lifecycle("   - Minecraft ${version}")
+            }
+        } else {
+            logger.lifecycle("${failed.size()} version(s) failed:")
+            failed.sort().each { version ->
+                logger.lifecycle("   - Minecraft ${version}")
+            }
+            logger.lifecycle('')
+            logger.lifecycle("Logs: ${logDir.absolutePath}/build-*.log")
+        }
+
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+
+        if (!failed.isEmpty()) {
+            throw new GradleException("Build failed for: ${failed.sort().join(', ')}")
+        }
+    }
+}
+
+// ============================================================
+// Run Client Tasks (convenience shortcuts)
+// ============================================================
+
+supportedVersions.each { version ->
+    def versionSuffix = version.replace('.', '_')
+    def loaders = fabricOnlyVersions.contains(version) ? ['fabric'] : ['fabric', 'neoforge']
+
+    loaders.each { loader ->
+        def loaderName = loader == 'neoforge' ? 'NeoForge' : loader.capitalize()
+        def taskName = "runClient${loaderName}${versionSuffix}"
+
+        tasks.register(taskName) {
+            group = taskGroupRun
+            description = "Run ${loaderName} client for Minecraft ${version}"
+
+            doLast {
+                def gradlew = new File(projectDir, 'gradlew').absolutePath
+                def cmd = [
+                    gradlew,
+                    ':' + loader + ':runClient',
+                    '-Ptarget_mc_version=' + version,
+                ] as List<String>
+
+                def pb = new ProcessBuilder(cmd)
+                pb.directory(projectDir)
+                pb.redirectErrorStream(true)
+
+                def process = pb.start()
+
+                // Forward output preserving ANSI escape sequences
+                def outputThread = Thread.start {
+                    def is = process.inputStream
+                    def buf = new byte[8192]
+                    int len
+                    while ((len = is.read(buf)) != -1) {
+                        System.out.write(buf, 0, len)
+                        System.out.flush()
+                    }
+                }
+
+                def exitCode = process.waitFor()
+                outputThread.join()
+                if (exitCode != 0) {
+                    throw new GradleException("${loader} client for ${version} exited with code ${exitCode}")
+                }
+            }
+        }
+    }
+}
+
+// ============================================================
+// Test Tasks
+// ============================================================
+
+/**
+ * Run unit tests for all supported Minecraft versions
+ * Usage: ./gradlew testAll
+ *
+ * Runs only common module JUnit tests (not GameTests).
+ * GameTests are run separately via gameTestAll.
+ *
+ * Note: Hotfix versions are excluded because they share modules with their base version.
+ * Running tests for the base version covers the same code used by hotfix versions.
+ */
+tasks.register('testAll') {
+    group = taskGroupTest
+    description = "Run unit tests for all supported Minecraft versions (${releaseVersions.join(', ')})"
+
+    doFirst {
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Running unit tests for ALL supported Minecraft versions...')
+        logger.lifecycle("Versions: ${releaseVersions.join(', ')}")
+        if (!hotfixVersions.isEmpty()) {
+            logger.lifecycle("(${hotfixVersions.keySet().join(', ')} excluded - shares modules with base version)")
+        }
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+    }
+
+    doLast {
+        def failed = []
+
+        releaseVersions.each { version ->
+            logger.lifecycle('')
+            logger.lifecycle(">>> Running unit tests for Minecraft ${version}...")
+            logger.lifecycle('')
+
+            try {
+                project.exec {
+                    commandLine './gradlew', ":common-${version}:test", "-Ptarget_mc_version=${version}"
+                    errorOutput = System.err
+                }
+                logger.lifecycle("SUCCESS: Minecraft ${version}")
+            } catch (Exception e) {
+                logger.error("FAILED: Minecraft ${version}")
+                failed.add(version)
+            }
+        }
+
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Unit Test Summary:')
+        logger.lifecycle('====================================================')
+
+        if (failed.isEmpty()) {
+            logger.lifecycle('All versions passed!')
+            releaseVersions.each { version ->
+                logger.lifecycle("   - Minecraft ${version}")
+            }
+        } else {
+            logger.lifecycle("${failed.size()} version(s) failed:")
+            failed.each { version ->
+                logger.lifecycle("   - Minecraft ${version}")
+            }
+            throw new GradleException("Unit tests failed for: ${failed.join(', ')}")
+        }
+
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+    }
+}
+
+// ============================================================
+// GameTest Tasks
+// ============================================================
+
+/**
+ * Run all verification tasks: cleanAll, validateResources, validateTranslations, buildAll, testAll, gameTestAll
+ * Usage: ./gradlew checkAll
+ *
+ * This is the comprehensive verification task that runs all checks in sequence.
+ * If any step fails, subsequent steps are skipped and the task fails.
+ */
+tasks.register('checkAll') {
+    group = taskGroupVerification
+    description = 'Run all verification tasks: cleanAll, validateResources, validateTranslations, buildAll, testAll, gameTestAll'
+
+    doFirst {
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Running ALL verification tasks...')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+    }
+
+    doLast {
+        def steps = [
+            [name: 'cleanAll', task: 'cleanAll'],
+            [name: 'validateResources', task: 'validateResources'],
+            [name: 'validateTranslations', task: 'validateTranslations'],
+            [name: 'buildAll', task: 'buildAll'],
+            [name: 'testAll', task: 'testAll'],
+            [name: 'gameTestAll', task: 'gameTestAll'],
+        ]
+
+        def passed = []
+        def failed = null
+
+        steps.each { step ->
+            if (failed != null) {
+                logger.lifecycle(">>> Skipping ${step.name} (previous step failed)")
+                return
+            }
+
+            logger.lifecycle('')
+            logger.lifecycle(">>> Running ${step.name}...")
+            logger.lifecycle('')
+
+            try {
+                project.exec {
+                    commandLine './gradlew', step.task
+                    errorOutput = System.err
+                }
+                passed.add(step.name)
+                logger.lifecycle("SUCCESS: ${step.name}")
+            } catch (Exception e) {
+                failed = step.name
+                logger.error("FAILED: ${step.name}")
+            }
+        }
+
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Verification Summary:')
+        logger.lifecycle('====================================================')
+
+        passed.each { name ->
+            logger.lifecycle("   PASSED: ${name}")
+        }
+        if (failed != null) {
+            logger.lifecycle("   FAILED: ${failed}")
+            def skipped = steps.findAll { s -> !passed.contains(s.name) && s.name != failed }
+            skipped.each { s ->
+                logger.lifecycle("   SKIPPED: ${s.name}")
+            }
+        }
+
+        logger.lifecycle('')
+        logger.lifecycle("Total: ${passed.size()} passed, ${failed != null ? 1 : 0} failed, ${steps.size() - passed.size() - (failed != null ? 1 : 0)} skipped")
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+
+        if (failed != null) {
+            throw new GradleException("Verification failed at: ${failed}")
+        }
+
+        logger.lifecycle('All verification tasks passed!')
+    }
+}
+
+// ============================================================
+// Release Tasks
+// ============================================================
+
+/**
+ * Collect release JARs from all versions into build/release/
+ * Usage: ./gradlew collectJars
+ *
+ * Looks for built JARs in each platform-version build/libs/ directory
+ * and copies them to a centralized build/release/ directory.
+ */
+tasks.register('collectJars') {
+    group = taskGroupName
+    description = 'Collect release JARs from all versions into build/release/'
+
+    doLast {
+        def releaseDir = file("${rootDir}/build/release")
+        if (releaseDir.exists()) {
+            releaseDir.deleteDir()
+        }
+        releaseDir.mkdirs()
+
+        def collected = []
+        def platforms = ['fabric', 'neoforge']
+
+        def archivesName = project.property('archives_name')
+        def modVersion = project.property('mod_version')
+
+        releaseVersions.each { version ->
+            platforms.each { platform ->
+                def libsDir = file("${rootDir}/${platform}/${version}/build/libs")
+                if (!libsDir.exists()) {
+                    logger.warn("SKIP: ${libsDir} does not exist (not built yet?)")
+                    return
+                }
+
+                def jarName = "${archivesName}-${modVersion}+${version}-${platform}.jar"
+                def jarFile = new File(libsDir, jarName)
+
+                if (jarFile.exists()) {
+                    ant.copy(file: jarFile, todir: releaseDir)
+                    collected.add(jarName)
+                    logger.lifecycle("Collected: ${jarName}")
+                } else {
+                    logger.warn("NOT FOUND: ${jarFile}")
+                }
+            }
+        }
+
+        logger.lifecycle('')
+        if (collected.isEmpty()) {
+            logger.warn('No release JARs found. Run buildAll first.')
+        } else {
+            logger.lifecycle("${collected.size()} JAR(s) collected into build/release/")
+        }
+    }
+}
+
+/**
+ * Full release: cleanAll, buildAll, collectJars
+ * Usage: ./gradlew release
+ *
+ * Runs the full release pipeline in sequence:
+ *   1. cleanAll - Clean all build outputs
+ *   2. buildAll - Build for all Minecraft versions
+ *   3. collectJars - Collect JARs into build/release/
+ */
+tasks.register('release') {
+    group = taskGroupName
+    description = 'Full release: cleanAll, buildAll, collectJars'
+
+    doLast {
+        def steps = ['cleanAll', 'buildAll', 'collectJars']
+
+        steps.each { step ->
+            logger.lifecycle('')
+            logger.lifecycle(">>> Running ${step}...")
+            logger.lifecycle('')
+
+            project.exec {
+                commandLine './gradlew', step
+                errorOutput = System.err
+            }
+        }
+
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('Release build completed!')
+        logger.lifecycle('JARs collected in: build/release/')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+    }
+}
+
+/**
+ * Run GameTests for all supported Minecraft versions and loaders
+ * Usage: ./gradlew gameTestAll
+ *
+ * Configurations are grouped by Minecraft version. Hotfix versions that share modules
+ * with a base version run sequentially in the same thread to avoid build conflicts.
+ *
+ * Within each version group, loaders run in a single Gradle process with
+ * --parallel to avoid concurrent builds of the shared common module.
+ * Each subprocess uses --project-cache-dir to isolate from the outer process.
+ *
+ * Log files are saved to build/gametest-<version>.log for debugging.
+ */
+tasks.register('gameTestAll') {
+    group = taskGroupTest
+    description = 'Run GameTests for all supported Minecraft versions and loaders'
+
+    doLast {
+        // Build version groups dynamically:
+        // - Each base version gets its own group
+        // - Hotfix versions are appended to their base version's group
+        def gameTestGroups = []
+        def processedVersions = [] as Set
+
+        supportedVersions.each { version ->
+            if (processedVersions.contains(version)) return
+
+            def group = [versions: [version]]
+            // Find any hotfix versions that map to this version
+            hotfixVersions.each { hotfix, base ->
+                if (base == version) {
+                    group.versions.add(hotfix)
+                    processedVersions.add(hotfix)
+                }
+            }
+
+            def tasks = fabricOnlyVersions.contains(version)
+                ? [':fabric:runGameTest']
+                : [':fabric:runGameTest', ':neoforge:runGameTestServer']
+            group.tasks = tasks
+            gameTestGroups.add(group)
+            processedVersions.add(version)
+        }
+
+        def passed = java.util.Collections.synchronizedList([])
+        def failed = java.util.Collections.synchronizedList([])
+
+        def gradlew = new File(projectDir, 'gradlew').absolutePath
+        def logDir = new File(projectDir, 'build')
+        logDir.mkdirs()
+
+        def maxParallel = 2
+        def executor = java.util.concurrent.Executors.newFixedThreadPool(maxParallel)
+        def futures = []
+
+        gameTestGroups.each { group ->
+            def groupLabel = group.versions.join('+')
+
+            logger.lifecycle(">>> Starting GameTests: versions ${groupLabel}...")
+
+            def future = executor.submit({
+                // Run each version in the group sequentially
+                group.versions.each { version ->
+                    def moduleVersion = hotfixVersions.getOrDefault(version, version)
+
+                    def cmd = [gradlew]
+                    cmd.addAll(group.tasks)
+                    cmd.addAll([
+                        '-Ptarget_mc_version=' + version,
+                        '--project-cache-dir', '.gradle/gametest-' + version,
+                        '--parallel',
+                        '--stacktrace'
+                    ])
+
+                    def logFile = new File(logDir, 'gametest-' + version + '.log')
+
+                    // Clean stale world directories to avoid session.lock conflicts
+                    // Use moduleVersion for directory path (hotfix versions use base version dir)
+                    ['fabric', 'neoforge'].each { loader ->
+                        def worldDir = new File(projectDir, loader + '/' + moduleVersion + '/run/world')
+                        if (worldDir.exists()) {
+                            worldDir.deleteDir()
+                        }
+                    }
+
+                    try {
+                        def pb = new ProcessBuilder(cmd)
+                        pb.directory(projectDir)
+                        pb.redirectErrorStream(true)
+                        pb.redirectOutput(logFile)
+
+                        def process = pb.start()
+                        def exitCode = process.waitFor()
+
+                        if (exitCode == 0) {
+                            // Extract loader names for reporting
+                            group.tasks.each { task ->
+                                def loader = task.split(':')[1]
+                                passed.add(loader + ' ' + version)
+                            }
+                        } else {
+                            group.tasks.each { task ->
+                                def loader = task.split(':')[1]
+                                failed.add(loader + ' ' + version + ' (see ' + logFile.absolutePath + ')')
+                            }
+                        }
+                    } catch (Exception e) {
+                        failed.add(version + ' (' + e.message + ')')
+                    }
+                }
+            } as Runnable)
+            futures.add(future)
+        }
+
+        // Wait for all GameTests to complete
+        futures.each { it.get() }
+        executor.shutdown()
+
+        logger.lifecycle('')
+        logger.lifecycle('====================================================')
+        logger.lifecycle('GameTest Summary:')
+        logger.lifecycle('====================================================')
+
+        passed.sort().each { label ->
+            logger.lifecycle("   PASSED: ${label}")
+        }
+        failed.sort().each { entry ->
+            logger.lifecycle("   FAILED: ${entry}")
+        }
+
+        logger.lifecycle('')
+        logger.lifecycle("Total: ${passed.size()} passed, ${failed.size()} failed")
+        logger.lifecycle("Logs: ${logDir.absolutePath}/gametest-*.log")
+        logger.lifecycle('====================================================')
+        logger.lifecycle('')
+
+        if (!failed.isEmpty()) {
+            throw new GradleException("GameTests failed for: ${failed.collect { it.split(' \\(')[0] }.join(', ')}")
+        }
+    }
+}
