@@ -16,6 +16,70 @@ Reusable Gradle scripts for multi-version Minecraft mod development with Archite
 
 ## Integration
 
+### Option A: Composite Build (Plugin)
+
+#### 1. Add as a Git submodule
+
+```bash
+git submodule add https://github.com/ksoichiro/minecraft-mod-gradle-scripts.git gradle/shared
+```
+
+#### 2. Include as a Composite Build in your `settings.gradle`
+
+```groovy
+includeBuild 'gradle/shared'
+```
+
+#### 3. Apply the plugin in your root `build.gradle`
+
+```groovy
+plugins {
+    id 'com.github.ksoichiro.mcmod'
+}
+
+mcmod {
+    // Shared properties
+    archivesName = 'mymod'
+    modVersion = '1.0.0'
+    supportedVersions = ['1.20.1', '1.21.1', '1.21.2', '1.21.4']
+    hotfixVersions = ['1.21.3': '1.21.2']
+    fabricOnlyVersions = ['1.20.1']
+    projectDisplayName = 'My Mod'
+
+    // Feature toggles (defaults shown)
+    multiVersion {
+        enabled = true
+    }
+    resourceValidation {
+        enabled = true
+        // sharedResourceDirs = ['common/shared/src/main/resources']
+        // entityIdFile = 'common/shared/src/main/java/.../ModEntityId.java'
+        // itemIdFile = 'common/shared/src/main/java/.../ModItemId.java'
+        // excludedEntities = ['gear_projectile']
+    }
+    prodRun {
+        enabled = false
+        // baseDir = "${rootDir}/run-prod"
+    }
+    releaseModrinth {
+        enabled = false
+        // projectId = 'yEsoyNev'
+        // depArchitecturyId = 'lhGA9TYQ'
+        // depFabricApiId = 'P7dR8mSH'
+    }
+    releaseCurseForge {
+        enabled = false
+        // projectId = '1414198'
+    }
+}
+```
+
+Any property not set in the `mcmod` block falls back to the corresponding value in `gradle.properties` (e.g., `supported_mc_versions`, `archives_name`).
+
+---
+
+### Option B: Script (Legacy)
+
 ### 1. Add as a Git submodule
 
 ```bash
