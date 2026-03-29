@@ -8,11 +8,13 @@ version = '0.1.0'
 
 repositories {
     mavenCentral()
+    maven { url 'https://jitpack.io' }
 }
 
 dependencies {
     implementation gradleApi()
     implementation localGroovy()
+    implementation 'com.github.Querz:NBT:6.1'
     testImplementation platform('org.spockframework:spock-bom:2.3-groovy-3.0')
     testImplementation 'org.spockframework:spock-core'
 }

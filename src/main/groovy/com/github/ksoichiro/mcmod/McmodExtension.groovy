@@ -18,6 +18,7 @@ class McmodExtension {
     final ProdRunExtension prodRun = new ProdRunExtension()
     final ReleaseModrinthExtension releaseModrinth = new ReleaseModrinthExtension()
     final ReleaseCurseForgeExtension releaseCurseForge = new ReleaseCurseForgeExtension()
+    final NbtConversionExtension nbtConversion = new NbtConversionExtension()
 
     void multiVersion(Action<? super MultiVersionExtension> action) {
         action.execute(multiVersion)
@@ -37,6 +38,10 @@ class McmodExtension {
 
     void releaseCurseForge(Action<? super ReleaseCurseForgeExtension> action) {
         action.execute(releaseCurseForge)
+    }
+
+    void nbtConversion(Action<? super NbtConversionExtension> action) {
+        action.execute(nbtConversion)
     }
 
     // --- Sub-extension classes ---
@@ -70,5 +75,14 @@ class McmodExtension {
     static class ReleaseCurseForgeExtension {
         boolean enabled = false
         String projectId
+    }
+
+    static class NbtConversionExtension {
+        boolean enabled = false
+        String sourceVersion
+        String targetVersion
+        String inputDir
+        String outputDir
+        Class<? extends NbtConverter> converterClass
     }
 }

@@ -173,4 +173,73 @@ class McmodPluginTest extends Specification {
         project.tasks.findByName('runClientFabric1_21_1') != null
         project.tasks.findByName('runClientNeoForge1_21_1') != null
     }
+
+    def "nbtConversion task is NOT registered when disabled (default)"() {
+        given:
+        Project project = ProjectBuilder.builder().build()
+        project.ext.set('supported_mc_versions', '1.20.1')
+
+        when:
+        project.plugins.apply('com.github.ksoichiro.mcmod')
+        project.evaluate()
+
+        then:
+        project.tasks.findByName('convertNbt') == null
+    }
+
+    def "nbtConversion task is registered when enabled"() {
+        given:
+        Project project = ProjectBuilder.builder().build()
+        project.ext.set('supported_mc_versions', '1.20.1')
+
+        when:
+        project.plugins.apply('com.github.ksoichiro.mcmod')
+        project.plugins.apply('java')
+        def ext = project.extensions.getByType(McmodExtension)
+        ext.nbtConversion.enabled = true
+        ext.nbtConversion.sourceVersion = '1.21.1'
+        ext.nbtConversion.targetVersion = '1.20.1'
+        ext.nbtConversion.inputDir = 'src/main/resources/data/testmod/structure'
+        ext.nbtConversion.outputDir = 'build/generated/nbt'
+        project.evaluate()
+
+        then:
+        project.tasks.findByName('convertNbt') != null
+    }
+
+    def "nbtConversion requires sourceVersion and targetVersion"() {
+        given:
+        Project project = ProjectBuilder.builder().build()
+        project.ext.set('supported_mc_versions', '1.20.1')
+
+        when:
+        project.plugins.apply('com.github.ksoichiro.mcmod')
+        project.plugins.apply('java')
+        def ext = project.extensions.getByType(McmodExtension)
+        ext.nbtConversion.enabled = true
+        ext.nbtConversion.inputDir = 'src/main/resources'
+        ext.nbtConversion.outputDir = 'build/generated/nbt'
+        project.evaluate()
+
+        then:
+        thrown(org.gradle.api.GradleException)
+    }
+
+    def "nbtConversion requires inputDir and outputDir"() {
+        given:
+        Project project = ProjectBuilder.builder().build()
+        project.ext.set('supported_mc_versions', '1.20.1')
+
+        when:
+        project.plugins.apply('com.github.ksoichiro.mcmod')
+        project.plugins.apply('java')
+        def ext = project.extensions.getByType(McmodExtension)
+        ext.nbtConversion.enabled = true
+        ext.nbtConversion.sourceVersion = '1.21.1'
+        ext.nbtConversion.targetVersion = '1.20.1'
+        project.evaluate()
+
+        then:
+        thrown(org.gradle.api.GradleException)
+    }
 }

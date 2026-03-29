@@ -27,6 +27,9 @@ class McmodPlugin implements Plugin<Project> {
             if (ext.prodRun.enabled) {
                 ProdRunTasks.register(project, ext)
             }
+            if (ext.nbtConversion.enabled) {
+                NbtConversionTasks.register(project, ext)
+            }
         }
     }
 
