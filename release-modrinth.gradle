@@ -22,7 +22,7 @@ tasks.register('releaseModrinth') {
         def depFabricApiId = project.findProperty('modrinth_dep_fabric_api') ?: 'P7dR8mSH'
 
         def releaseDir = file("${rootDir}/build/release")
-        def jarPattern = ~/${archivesName}-(\d+\.\d+\.\d+)\+(\d+\.\d+\.\d+)-([a-z]+)\.jar/
+        def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
         def jars = []
         if (project.hasProperty('jar')) {

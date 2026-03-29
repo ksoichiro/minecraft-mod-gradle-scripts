@@ -20,7 +20,7 @@ tasks.register('releaseCurseForge') {
         def apiBase = 'https://minecraft.curseforge.com/api'
 
         def releaseDir = file("${rootDir}/build/release")
-        def jarPattern = ~/${archivesName}-(\d+\.\d+\.\d+)\+(\d+\.\d+\.\d+)-([a-z]+)\.jar/
+        def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
         def jars = []
         if (project.hasProperty('jar')) {
@@ -56,10 +56,14 @@ tasks.register('releaseCurseForge') {
                 default: throw new GradleException("Unknown loader: ${loader}")
             }
 
+            // Try exact version first (e.g., "Minecraft 26.1"), then major (e.g., "Minecraft 1.21")
             def mcMajor = gameVersion.substring(0, gameVersion.lastIndexOf('.'))
-            def mcTypeId = versionTypes.find { it.name == "Minecraft ${mcMajor}" }?.id
+            def mcTypeId = versionTypes.find { it.name == "Minecraft ${gameVersion}" }?.id
             if (!mcTypeId) {
-                throw new GradleException("Could not find version type for Minecraft ${mcMajor}")
+                mcTypeId = versionTypes.find { it.name == "Minecraft ${mcMajor}" }?.id
+            }
+            if (!mcTypeId) {
+                throw new GradleException("Could not find version type for Minecraft ${gameVersion} or ${mcMajor}")
             }
 
             def gameVersionId = versionsJson.find { it.name == gameVersion && it.gameVersionTypeID == mcTypeId }?.id
