@@ -114,7 +114,9 @@ class ProdRunTasks {
 
             project.dependencies {
                 prodMods "net.fabricmc.fabric-api:fabric-api:${project.ext.fabric_api_version}"
-                prodMods "dev.architectury:architectury-fabric:${project.ext.architectury_api_version}"
+                if (project.ext.has('architectury_api_version')) {
+                    prodMods "dev.architectury:architectury-fabric:${project.ext.architectury_api_version}"
+                }
             }
 
             // --- Task: downloadFabricLoader ---
@@ -155,7 +157,7 @@ class ProdRunTasks {
                     project.ant.copy(file: modJar, todir: modsDir)
                     project.logger.lifecycle("  Mod: ${modJar.name}")
 
-                    // Dependency mods (Fabric API, Architectury API)
+                    // Dependency mods (Fabric API, Architectury API if configured)
                     project.configurations.prodMods.files.each { f ->
                         project.ant.copy(file: f, todir: modsDir)
                         project.logger.lifecycle("  Dep: ${f.name}")
@@ -272,7 +274,9 @@ class ProdRunTasks {
             }
 
             project.dependencies {
-                prodMods "dev.architectury:architectury-neoforge:${project.ext.architectury_api_version}"
+                if (project.ext.has('architectury_api_version')) {
+                    prodMods "dev.architectury:architectury-neoforge:${project.ext.architectury_api_version}"
+                }
             }
 
             def neoforgeVersion = project.ext.neoforge_version
@@ -362,7 +366,7 @@ class ProdRunTasks {
                     project.ant.copy(file: modJar, todir: modsDir)
                     project.logger.lifecycle("  Mod: ${modJar.name}")
 
-                    // Dependency mods (Architectury API)
+                    // Dependency mods (Architectury API if configured)
                     project.configurations.prodMods.files.each { f ->
                         project.ant.copy(file: f, todir: modsDir)
                         project.logger.lifecycle("  Dep: ${f.name}")
