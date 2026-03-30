@@ -781,6 +781,7 @@ if (project.name == 'forge') {
     }
 
     def forgeVersion = project.findProperty('forge_version')
+    def forgeMajorVersion = project.findProperty('forge_major_version') as Integer
     def forgeInstallDir = file("${prodCacheDir}/forge-install-${mcVersion}")
     def forgeVersionId = "forge-${forgeVersion}"
 
@@ -830,6 +831,15 @@ if (project.name == 'forge') {
             def profileFile = new File(forgeInstallDir, "launcher_profiles.json")
             if (!profileFile.exists()) {
                 profileFile.text = '{"profiles":{}}'
+            }
+
+            // Download ForgeWrapper for legacy Forge (< 50, MC 1.20.4 and earlier)
+            if (forgeMajorVersion < 50) {
+                def forgeWrapperJar = file("${prodCacheDir}/forgewrapper/ForgeWrapper.jar")
+                prodDownloadFile(
+                    'https://files.prismlauncher.org/maven/io/github/zekerzhayard/ForgeWrapper/prism-2025-12-07/ForgeWrapper-prism-2025-12-07.jar',
+                    forgeWrapperJar
+                )
             }
 
             // Run installer
@@ -905,9 +915,20 @@ if (project.name == 'forge') {
             // Build classpath from installer libraries only.
             def cp = prodGetInstallerLibraryFiles(mergedJson, forgeInstallDir)
             cp = prodPatchLwjglForArm64(cp)
-            classpath = files(cp)
 
-            mainClass.set(mergedJson.mainClass)
+            // Legacy Forge (< 50): use ForgeWrapper to handle runtime installation
+            if (forgeMajorVersion < 50) {
+                def forgeWrapperJar = file("${prodCacheDir}/forgewrapper/ForgeWrapper.jar")
+                cp.add(forgeWrapperJar)
+                mainClass.set('io.github.zekerzhayard.forgewrapper.installer.Main')
+                jvmArgs "-Dforgewrapper.librariesDir=${librariesDir.absolutePath}"
+                jvmArgs "-Dforgewrapper.installer=${file("${prodCacheDir}/installers/forge-${forgeVersion}-installer.jar").absolutePath}"
+                jvmArgs "-Dforgewrapper.minecraft=${file("${prodCacheDir}/client/${mcVersion}.jar").absolutePath}"
+            } else {
+                mainClass.set(mergedJson.mainClass)
+            }
+
+            classpath = files(cp)
 
             // Placeholder substitutions for version JSON arguments
             def placeholders = [
@@ -941,7 +962,7 @@ if (project.name == 'forge') {
 
             logger.lifecycle("=== runProd (Forge ${mcVersion}) ===")
             logger.lifecycle("  Game dir: ${instanceDir}")
-            logger.lifecycle("  Main class: ${mergedJson.mainClass}")
+            logger.lifecycle("  Main class: ${mainClass.get()}")
             logger.lifecycle("  Classpath entries: ${cp.size()}")
         }
     }
