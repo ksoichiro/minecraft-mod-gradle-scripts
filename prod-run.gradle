@@ -469,7 +469,8 @@ if (project.name == 'fabric') {
     tasks.register('setupProdMods') {
         group = taskGroupName
         description = "Copy built mod JAR and dependencies to mods/ for Fabric ${mcVersion}"
-        dependsOn 'remapJar'
+        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+        dependsOn modJarTaskName
 
         doLast {
             def modsDir = file("${prodBaseDir}/instances/fabric-${mcVersion}/mods")
@@ -477,7 +478,7 @@ if (project.name == 'fabric') {
             modsDir.mkdirs()
 
             // Built mod JAR
-            def modJar = tasks.named('remapJar').get().archiveFile.get().asFile
+            def modJar = tasks.named(modJarTaskName).get().archiveFile.get().asFile
             ant.copy(file: modJar, todir: modsDir)
             logger.lifecycle("  Mod: ${modJar.name}")
 
@@ -674,7 +675,8 @@ if (project.name == 'neoforge') {
     tasks.register('setupProdMods') {
         group = taskGroupName
         description = "Copy built mod JAR and dependencies to mods/ for NeoForge ${mcVersion}"
-        dependsOn 'remapJar'
+        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+        dependsOn modJarTaskName
 
         doLast {
             def modsDir = file("${prodBaseDir}/instances/neoforge-${mcVersion}/mods")
@@ -682,7 +684,7 @@ if (project.name == 'neoforge') {
             modsDir.mkdirs()
 
             // Built mod JAR
-            def modJar = tasks.named('remapJar').get().archiveFile.get().asFile
+            def modJar = tasks.named(modJarTaskName).get().archiveFile.get().asFile
             ant.copy(file: modJar, todir: modsDir)
             logger.lifecycle("  Mod: ${modJar.name}")
 
