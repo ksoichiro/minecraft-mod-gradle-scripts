@@ -67,8 +67,10 @@ class NbtConversionTasks {
         }
         project.afterEvaluate {
             // Add outputDir as a resource source so converted files end up in the JAR
-            project.sourceSets.matching { it.name == 'main' }.configureEach {
-                resources.srcDir(outputDir)
+            if (project.plugins.hasPlugin('java') || project.plugins.hasPlugin('java-library')) {
+                project.sourceSets.matching { it.name == 'main' }.configureEach {
+                    resources.srcDir(outputDir)
+                }
             }
         }
     }
