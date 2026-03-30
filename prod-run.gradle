@@ -440,11 +440,6 @@ if (project.name == 'fabric') {
         }
     }
 
-    dependencies {
-        prodMods "net.fabricmc.fabric-api:fabric-api:${project.ext.fabric_api_version}"
-        prodMods "dev.architectury:architectury-fabric:${project.ext.architectury_api_version}"
-    }
-
     // --- Task: downloadFabricLoader ---
     // Downloads Fabric Loader and its dependencies (ASM, Mixin, intermediary)
     // using the Fabric Meta API profile.
@@ -601,10 +596,6 @@ if (project.name == 'neoforge') {
             canBeConsumed = false
             transitive = false
         }
-    }
-
-    dependencies {
-        prodMods "dev.architectury:architectury-neoforge:${project.ext.architectury_api_version}"
     }
 
     def neoforgeVersion = project.ext.neoforge_version
