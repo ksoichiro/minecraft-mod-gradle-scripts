@@ -767,3 +767,182 @@ if (project.name == 'neoforge') {
         }
     }
 }
+
+// ============================================================
+// Forge-specific tasks
+// ============================================================
+if (project.name == 'forge') {
+    configurations {
+        prodMods {
+            canBeResolved = true
+            canBeConsumed = false
+            transitive = false
+        }
+    }
+
+    def forgeVersion = project.findProperty('forge_version')
+    def forgeInstallDir = file("${prodCacheDir}/forge-install-${mcVersion}")
+    def forgeVersionId = "forge-${forgeVersion}"
+
+    // --- Task: installForge ---
+    // Downloads Forge installer, places vanilla files, runs --installClient.
+    tasks.register('installForge') {
+        group = taskGroupName
+        description = "Install Forge ${forgeVersion} for ${mcVersion}"
+        dependsOn 'downloadMinecraft'
+
+        doLast {
+            def versionJsonFile = prodFindLoaderVersionJson(forgeInstallDir, mcVersion)
+            if (versionJsonFile != null) {
+                logger.lifecycle("  Forge already installed: ${forgeVersion}")
+                return
+            }
+
+            logger.lifecycle("=== Installing Forge ${forgeVersion} ===")
+            forgeInstallDir.mkdirs()
+
+            // Download installer
+            def installerJar = file("${prodCacheDir}/installers/forge-${forgeVersion}-installer.jar")
+            prodDownloadFile(
+                "https://maven.minecraftforge.net/net/minecraftforge/forge/${forgeVersion}/forge-${forgeVersion}-installer.jar",
+                installerJar
+            )
+
+            // Place vanilla files for the installer
+            def vanillaVersionDir = new File(forgeInstallDir, "versions/${mcVersion}")
+            vanillaVersionDir.mkdirs()
+            ant.copy(file: file("${prodCacheDir}/versions/${mcVersion}.json"),
+                      tofile: new File(vanillaVersionDir, "${mcVersion}.json"),
+                      overwrite: false)
+            ant.copy(file: file("${prodCacheDir}/client/${mcVersion}.jar"),
+                      tofile: new File(vanillaVersionDir, "${mcVersion}.jar"),
+                      overwrite: false)
+
+            // Copy vanilla libraries so the installer can find them
+            def vanillaLibsDir = file("${prodCacheDir}/libraries")
+            if (vanillaLibsDir.exists()) {
+                ant.copy(todir: new File(forgeInstallDir, "libraries")) {
+                    fileset(dir: vanillaLibsDir)
+                }
+            }
+
+            // Create dummy launcher profile required by the installer
+            def profileFile = new File(forgeInstallDir, "launcher_profiles.json")
+            if (!profileFile.exists()) {
+                profileFile.text = '{"profiles":{}}'
+            }
+
+            // Run installer
+            logger.lifecycle("  Running Forge installer...")
+            def launcher = javaToolchains.launcherFor {
+                languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
+            }.get()
+            def process = new ProcessBuilder(
+                launcher.executablePath.asFile.absolutePath,
+                '-jar', installerJar.absolutePath,
+                '--installClient', forgeInstallDir.absolutePath
+            ).inheritIO().start()
+            def exitCode = process.waitFor()
+            if (exitCode != 0) {
+                throw new GradleException("Forge installer failed with exit code ${exitCode}")
+            }
+
+            // Verify installation
+            versionJsonFile = prodFindLoaderVersionJson(forgeInstallDir, mcVersion)
+            if (versionJsonFile == null) {
+                throw new GradleException("Forge installer did not create expected version JSON in: ${forgeInstallDir}/versions/")
+            }
+            logger.lifecycle("  Forge installed successfully")
+        }
+    }
+
+    // --- Task: setupProdMods ---
+    // Copies built mod JAR and dependency mods to the instance mods/ directory.
+    tasks.register('setupProdMods') {
+        group = taskGroupName
+        description = "Copy built mod JAR and dependencies to mods/ for Forge ${mcVersion}"
+        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+        dependsOn modJarTaskName
+
+        doLast {
+            def modsDir = file("${prodBaseDir}/instances/forge-${mcVersion}/mods")
+            if (modsDir.exists()) modsDir.deleteDir()
+            modsDir.mkdirs()
+
+            // Built mod JAR
+            def modJar = tasks.named(modJarTaskName).get().archiveFile.get().asFile
+            ant.copy(file: modJar, todir: modsDir)
+            logger.lifecycle("  Mod: ${modJar.name}")
+
+            // Optional dependency mods
+            configurations.prodMods.files.each { f ->
+                ant.copy(file: f, todir: modsDir)
+                logger.lifecycle("  Dep: ${f.name}")
+            }
+        }
+    }
+
+    // --- Task: runProd ---
+    // Launches Minecraft with built mod in a production-like environment.
+    tasks.register('runProd', JavaExec) {
+        group = taskGroupName
+        description = "Launch Minecraft in production-like environment (Forge ${mcVersion})"
+        dependsOn 'downloadMinecraft', 'installForge', 'setupProdMods'
+
+        doFirst {
+            def vanillaJson = prodGetVersionJson(mcVersion)
+            def loaderJsonFile = prodFindLoaderVersionJson(forgeInstallDir, mcVersion)
+            def loaderJson = new JsonSlurper().parse(loaderJsonFile)
+            def mergedJson = prodMergeVersionJsons(loaderJson, vanillaJson)
+
+            def instanceDir = file("${prodBaseDir}/instances/forge-${mcVersion}")
+            instanceDir.mkdirs()
+            def nativesDir = new File(instanceDir, "natives")
+            nativesDir.mkdirs()
+            prodExtractNatives(vanillaJson, nativesDir)
+            def librariesDir = new File(forgeInstallDir, "libraries")
+
+            // Build classpath from installer libraries only.
+            def cp = prodGetInstallerLibraryFiles(mergedJson, forgeInstallDir)
+            cp = prodPatchLwjglForArm64(cp)
+            classpath = files(cp)
+
+            mainClass.set(mergedJson.mainClass)
+
+            // Placeholder substitutions for version JSON arguments
+            def placeholders = [
+                '${library_directory}'  : librariesDir.absolutePath,
+                '${classpath_separator}': File.pathSeparator,
+                '${version_name}'       : forgeVersionId,
+                '${natives_directory}'  : nativesDir.absolutePath,
+                '${launcher_name}'      : 'GradleProdRun',
+                '${launcher_version}'   : '1.0',
+                '${auth_player_name}'   : 'Dev',
+                '${version_type}'       : 'release',
+                '${game_directory}'     : instanceDir.absolutePath,
+                '${assets_root}'        : file("${prodCacheDir}/assets").absolutePath,
+                '${assets_index_name}'  : vanillaJson.assetIndex.id,
+                '${auth_uuid}'          : '00000000-0000-0000-0000-000000000000',
+                '${auth_access_token}'  : '0',
+                '${clientid}'           : '0',
+                '${auth_xuid}'          : '0',
+                '${user_type}'          : 'legacy',
+                '${user_properties}'    : '{}',
+            ]
+
+            // JVM arguments from version JSON + memory settings
+            jvmArgs '-Xmx2G', '-Xms512M'
+            jvmArgs prodProcessArguments(mergedJson.arguments.jvm, placeholders)
+
+            // Game arguments from version JSON
+            args prodProcessArguments(mergedJson.arguments.game, placeholders)
+
+            workingDir = instanceDir
+
+            logger.lifecycle("=== runProd (Forge ${mcVersion}) ===")
+            logger.lifecycle("  Game dir: ${instanceDir}")
+            logger.lifecycle("  Main class: ${mergedJson.mainClass}")
+            logger.lifecycle("  Classpath entries: ${cp.size()}")
+        }
+    }
+}
