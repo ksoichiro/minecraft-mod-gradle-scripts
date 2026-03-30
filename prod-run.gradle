@@ -951,9 +951,15 @@ if (project.name == 'forge') {
                 '${user_properties}'    : '{}',
             ]
 
-            // JVM arguments from version JSON + memory settings
+            // JVM arguments
             jvmArgs '-Xmx2G', '-Xms512M'
-            jvmArgs prodProcessArguments(mergedJson.arguments.jvm, placeholders)
+            if (prodGetMojangOs() == 'osx') {
+                jvmArgs '-XstartOnFirstThread'
+            }
+            jvmArgs "-Djava.library.path=${nativesDir.absolutePath}"
+            if (forgeMajorVersion >= 50) {
+                jvmArgs prodProcessArguments(mergedJson.arguments.jvm, placeholders)
+            }
 
             // Game arguments from version JSON
             args prodProcessArguments(mergedJson.arguments.game, placeholders)
