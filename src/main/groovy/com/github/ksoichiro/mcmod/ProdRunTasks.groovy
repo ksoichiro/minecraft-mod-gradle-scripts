@@ -19,7 +19,7 @@ class ProdRunTasks {
     private static void registerForSubproject(Project project, McmodExtension ext) {
         def prodBaseDir = ext.prodRun.baseDir
         def prodCacheDir = "${prodBaseDir}/cache"
-        def mcVersion = project.ext.minecraft_version
+        def mcVersion = project.findProperty('minecraft_version')
         def taskGroupName = ext.projectDisplayName.toLowerCase() + ' prod'
 
         // ============================================================
@@ -119,7 +119,7 @@ class ProdRunTasks {
 
                 doLast {
                     project.logger.lifecycle("=== Fabric Loader ===")
-                    def profile = getFabricProfile(prodCacheDir, mcVersion, project.ext.fabric_loader_version, project)
+                    def profile = getFabricProfile(prodCacheDir, mcVersion, project.findProperty('fabric_loader_version'), project)
                     def fabricLibsDir = project.file("${prodCacheDir}/fabric-loader-libs")
 
                     profile.libraries.each { lib ->
@@ -167,7 +167,7 @@ class ProdRunTasks {
 
                 doFirst {
                     def versionJson = getVersionJson(prodCacheDir, mcVersion, project)
-                    def profile = getFabricProfile(prodCacheDir, mcVersion, project.ext.fabric_loader_version, project)
+                    def profile = getFabricProfile(prodCacheDir, mcVersion, project.findProperty('fabric_loader_version'), project)
                     def instanceDir = project.file("${prodBaseDir}/instances/fabric-${mcVersion}")
                     instanceDir.mkdirs()
 
@@ -267,7 +267,7 @@ class ProdRunTasks {
                 }
             }
 
-            def neoforgeVersion = project.ext.neoforge_version
+            def neoforgeVersion = project.findProperty('neoforge_version')
             def neoforgeInstallDir = project.file("${prodCacheDir}/neoforge-install-${mcVersion}")
             def neoforgeVersionId = "neoforge-${neoforgeVersion}"
 
@@ -323,7 +323,7 @@ class ProdRunTasks {
                     // Run installer
                     project.logger.lifecycle("  Running NeoForge installer...")
                     def launcher = project.javaToolchains.launcherFor {
-                        languageVersion = project.ext.java_version
+                        languageVersion = project.findProperty('java_version')
                     }.get()
                     def process = new ProcessBuilder(
                         launcher.executablePath.asFile.absolutePath,

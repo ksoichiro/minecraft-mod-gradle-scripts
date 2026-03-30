@@ -14,7 +14,7 @@ import groovy.json.JsonSlurper
 // --- Configuration ---
 def prodBaseDir = project.findProperty('prod_base_dir') ?: "${rootDir}/run-prod"
 def prodCacheDir = "${prodBaseDir}/cache"
-def mcVersion = project.ext.minecraft_version
+def mcVersion = project.findProperty('minecraft_version')
 def taskGroupName = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' prod'
 
 // --- Helper: Download file with caching ---
@@ -449,7 +449,7 @@ if (project.name == 'fabric') {
 
         doLast {
             logger.lifecycle("=== Fabric Loader ===")
-            def profile = prodGetFabricProfile(mcVersion, project.ext.fabric_loader_version)
+            def profile = prodGetFabricProfile(mcVersion, project.findProperty('fabric_loader_version'))
             def fabricLibsDir = file("${prodCacheDir}/fabric-loader-libs")
 
             profile.libraries.each { lib ->
@@ -499,7 +499,7 @@ if (project.name == 'fabric') {
 
         doFirst {
             def versionJson = prodGetVersionJson(mcVersion)
-            def profile = prodGetFabricProfile(mcVersion, project.ext.fabric_loader_version)
+            def profile = prodGetFabricProfile(mcVersion, project.findProperty('fabric_loader_version'))
             def instanceDir = file("${prodBaseDir}/instances/fabric-${mcVersion}")
             instanceDir.mkdirs()
 
@@ -599,7 +599,7 @@ if (project.name == 'neoforge') {
         }
     }
 
-    def neoforgeVersion = project.ext.neoforge_version
+    def neoforgeVersion = project.findProperty('neoforge_version')
     def neoforgeInstallDir = file("${prodCacheDir}/neoforge-install-${mcVersion}")
     def neoforgeVersionId = "neoforge-${neoforgeVersion}"
 
@@ -655,7 +655,7 @@ if (project.name == 'neoforge') {
             // Run installer
             logger.lifecycle("  Running NeoForge installer...")
             def launcher = javaToolchains.launcherFor {
-                languageVersion = JavaLanguageVersion.of(project.ext.java_version)
+                languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
             }.get()
             def process = new ProcessBuilder(
                 launcher.executablePath.asFile.absolutePath,
