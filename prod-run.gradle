@@ -780,8 +780,18 @@ if (project.name == 'forge') {
         }
     }
 
-    def forgeVersion = project.findProperty('forge_version')
     def forgeMajorVersion = project.findProperty('forge_major_version') as Integer
+
+    // Forge < 50 (MC 1.20.4 and earlier) is not supported by prod-run.
+    // The legacyforge plugin produces Mojang-mapped JARs, but the Forge
+    // runtime uses SRG mappings. ForgeWrapper integration was attempted
+    // but could not fully replicate the Prism Launcher environment.
+    // Use runClient or an external launcher (e.g., Prism Launcher) for testing.
+    if (forgeMajorVersion == null || forgeMajorVersion < 50) {
+        return
+    }
+
+    def forgeVersion = project.findProperty('forge_version')
     def forgeInstallDir = file("${prodCacheDir}/forge-install-${mcVersion}")
     def forgeVersionId = "forge-${forgeVersion}"
 
