@@ -325,10 +325,14 @@ class ProdRunTasks {
                     def launcher = project.javaToolchains.launcherFor {
                         languageVersion = project.ext.java_version
                     }.get()
-                    project.exec {
-                        commandLine launcher.executablePath.asFile.absolutePath,
-                            '-jar', installerJar.absolutePath,
-                            '--installClient', neoforgeInstallDir.absolutePath
+                    def process = new ProcessBuilder(
+                        launcher.executablePath.asFile.absolutePath,
+                        '-jar', installerJar.absolutePath,
+                        '--installClient', neoforgeInstallDir.absolutePath
+                    ).inheritIO().start()
+                    def exitCode = process.waitFor()
+                    if (exitCode != 0) {
+                        throw new org.gradle.api.GradleException("NeoForge installer failed with exit code ${exitCode}")
                     }
 
                     if (!versionJsonFile.exists()) {
