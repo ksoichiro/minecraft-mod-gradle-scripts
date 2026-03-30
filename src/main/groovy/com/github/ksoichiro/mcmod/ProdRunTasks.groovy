@@ -112,13 +112,6 @@ class ProdRunTasks {
                 }
             }
 
-            project.dependencies {
-                prodMods "net.fabricmc.fabric-api:fabric-api:${project.ext.fabric_api_version}"
-                if (project.ext.has('architectury_api_version')) {
-                    prodMods "dev.architectury:architectury-fabric:${project.ext.architectury_api_version}"
-                }
-            }
-
             // --- Task: downloadFabricLoader ---
             project.tasks.register('downloadFabricLoader') {
                 group = taskGroupName
@@ -145,7 +138,8 @@ class ProdRunTasks {
             project.tasks.register('setupProdMods') {
                 group = taskGroupName
                 description = "Copy built mod JAR and dependencies to mods/ for Fabric ${mcVersion}"
-                dependsOn 'remapJar'
+                def modJarTaskName = project.tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+                dependsOn modJarTaskName
 
                 doLast {
                     def modsDir = project.file("${prodBaseDir}/instances/fabric-${mcVersion}/mods")
@@ -153,7 +147,7 @@ class ProdRunTasks {
                     modsDir.mkdirs()
 
                     // Built mod JAR
-                    def modJar = project.tasks.named('remapJar').get().archiveFile.get().asFile
+                    def modJar = project.tasks.named(modJarTaskName).get().archiveFile.get().asFile
                     project.ant.copy(file: modJar, todir: modsDir)
                     project.logger.lifecycle("  Mod: ${modJar.name}")
 
@@ -273,12 +267,6 @@ class ProdRunTasks {
                 }
             }
 
-            project.dependencies {
-                if (project.ext.has('architectury_api_version')) {
-                    prodMods "dev.architectury:architectury-neoforge:${project.ext.architectury_api_version}"
-                }
-            }
-
             def neoforgeVersion = project.ext.neoforge_version
             def neoforgeInstallDir = project.file("${prodCacheDir}/neoforge-install-${mcVersion}")
             def neoforgeVersionId = "neoforge-${neoforgeVersion}"
@@ -354,7 +342,8 @@ class ProdRunTasks {
             project.tasks.register('setupProdMods') {
                 group = taskGroupName
                 description = "Copy built mod JAR and dependencies to mods/ for NeoForge ${mcVersion}"
-                dependsOn 'remapJar'
+                def modJarTaskName = project.tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+                dependsOn modJarTaskName
 
                 doLast {
                     def modsDir = project.file("${prodBaseDir}/instances/neoforge-${mcVersion}/mods")
@@ -362,7 +351,7 @@ class ProdRunTasks {
                     modsDir.mkdirs()
 
                     // Built mod JAR
-                    def modJar = project.tasks.named('remapJar').get().archiveFile.get().asFile
+                    def modJar = project.tasks.named(modJarTaskName).get().archiveFile.get().asFile
                     project.ant.copy(file: modJar, todir: modsDir)
                     project.logger.lifecycle("  Mod: ${modJar.name}")
 
