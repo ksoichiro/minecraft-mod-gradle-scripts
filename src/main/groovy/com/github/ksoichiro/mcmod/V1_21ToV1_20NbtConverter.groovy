@@ -48,6 +48,20 @@ class V1_21ToV1_20NbtConverter implements NbtConverter {
             }
         }
 
+        // Convert entities (item frames, armor stands, etc.)
+        if (root.containsKey("entities")) {
+            def entities = root.getListTag("entities")
+            if (entities != null) {
+                for (int i = 0; i < entities.size(); i++) {
+                    def entity = entities.get(i) as CompoundTag
+                    if (entity.containsKey("nbt")) {
+                        def nbt = entity.getCompoundTag("nbt")
+                        entity.put("nbt", convertEntityNbt(nbt))
+                    }
+                }
+            }
+        }
+
         return DefaultNbtConverter.serializeToBytes(namedTag)
     }
 
@@ -147,6 +161,66 @@ class V1_21ToV1_20NbtConverter implements NbtConverter {
         // Copy tag if present
         if (item.containsKey("tag")) {
             item120.put("tag", item.getCompoundTag("tag"))
+        }
+
+        return item120
+    }
+
+    private static CompoundTag convertEntityNbt(CompoundTag nbt) {
+        def result = new CompoundTag()
+        nbt.entrySet().forEach { entry -> result.put(entry.getKey(), entry.getValue()) }
+
+        // Convert single Item field (item frames)
+        if (nbt.containsKey("Item")) {
+            def item = nbt.getCompoundTag("Item")
+            if (item != null) {
+                result.put("Item", convertSingleItem(item))
+            }
+        }
+
+        // Convert ArmorItems / HandItems lists if present (armor stands)
+        ['ArmorItems', 'HandItems'].each { fieldName ->
+            if (nbt.containsKey(fieldName)) {
+                def items = nbt.getListTag(fieldName)
+                if (items != null) {
+                    def converted = new ListTag<>(CompoundTag.class)
+                    for (int i = 0; i < items.size(); i++) {
+                        converted.add(convertSingleItem(items.get(i) as CompoundTag))
+                    }
+                    result.put(fieldName, converted)
+                }
+            }
+        }
+
+        return result
+    }
+
+    private static CompoundTag convertSingleItem(CompoundTag item121) {
+        def item120 = new CompoundTag()
+
+        if (item121.containsKey("id")) {
+            item120.putString("id", item121.getString("id"))
+        }
+
+        if (item121.containsKey("count")) {
+            item120.putByte("Count", (byte) item121.getInt("count"))
+        } else if (item121.containsKey("Count")) {
+            item120.put("Count", item121.get("Count"))
+        }
+
+        if (item121.containsKey("components")) {
+            def components = item121.getCompoundTag("components")
+            if (components != null && components.size() > 0) {
+                def tagData = convertComponentsToTag(components)
+                if (tagData.size() > 0) {
+                    item120.put("tag", tagData)
+                }
+            }
+        }
+
+        // Preserve existing tag if present
+        if (item121.containsKey("tag")) {
+            item120.put("tag", item121.getCompoundTag("tag"))
         }
 
         return item120
