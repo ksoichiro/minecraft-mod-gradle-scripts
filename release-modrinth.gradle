@@ -46,7 +46,7 @@ tasks.register('releaseModrinth') {
 
             logger.lifecycle("Releasing ${jarFile.name} (mod: ${jarModVersion}, mc: ${gameVersion}, loader: ${loader})")
 
-            def changelog = ext.readChangelog.call(rootDir, jarModVersion)
+            def changelog = project.ext.readChangelog.call(rootDir, jarModVersion)
 
             def dependencies = []
             if (useArchitectury) {
