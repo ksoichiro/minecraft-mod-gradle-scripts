@@ -76,7 +76,7 @@ tasks.register('releaseCurseForge') {
                 throw new GradleException("Could not find CurseForge version ID for loader ${cfLoader}")
             }
 
-            def changelog = ext.readChangelog(rootDir, jarModVersion)
+            def changelog = ext.readChangelog.call(rootDir, jarModVersion)
 
             def metadata = JsonOutput.toJson([
                 changelog: changelog,
