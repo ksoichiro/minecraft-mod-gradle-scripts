@@ -178,6 +178,78 @@ def convert_legacy_item_format(item: Any) -> tag.Compound:
     return tag.Compound(item_1_20)
 
 
+def convert_entity_item_field(item: Any) -> tag.Compound:
+    """
+    Convert a single item compound stored on an entity (Item Frame, Item entity,
+    etc.) from 1.21.1 → 1.20.1 format.
+
+    Unlike container slots, entity item fields have no Slot. The transformation
+    is just count/components → Count/tag, with id preserved as a String. Any
+    field we do not recognize is passed through unchanged so we do not silently
+    drop NBT we may not yet understand.
+    """
+    out: Dict[str, Any] = {}
+    for key, value in item.items():
+        if key == "count":
+            out["Count"] = tag.Byte(int(value))
+        elif key == "Count":
+            out["Count"] = value if isinstance(value, tag.Byte) else tag.Byte(int(value))
+        elif key == "id":
+            out["id"] = tag.String(str(value))
+        elif key == "components" and isinstance(value, (dict, tag.Compound)) and value:
+            tag_data = convert_components_to_tag(value)
+            if tag_data and len(tag_data) > 0:
+                out["tag"] = tag_data
+        else:
+            out[key] = value
+    return tag.Compound(out)
+
+
+# Entity NBT fields known to hold a single item compound.
+_ENTITY_ITEM_SINGLE_FIELDS = ("Item", "SaddleItem", "Trident")
+
+# Entity NBT fields known to hold a list of item compounds.
+_ENTITY_ITEM_LIST_FIELDS = ("Items", "HandItems", "ArmorItems", "Inventory")
+
+
+def convert_entity_nbt(entity_nbt: Any) -> tag.Compound:
+    """
+    Rewrite item-bearing fields in an entity NBT from 1.21.1 → 1.20.1 format.
+
+    Targets the standard vanilla item-carrying fields on entities embedded in a
+    structure template (Item Frame {@code Item}, mob {@code HandItems} /
+    {@code ArmorItems}, container minecart {@code Items}, etc.). Other entity
+    fields are passed through unchanged.
+
+    Without this pass the entity loads on 1.20.1 with a warning like:
+        Unable to load item from: {count:1,id:"minecraft:iron_pickaxe"}
+    and the item silently drops out of the entity (e.g. an empty Item Frame).
+    """
+    converted = dict(entity_nbt)
+
+    for field in _ENTITY_ITEM_SINGLE_FIELDS:
+        value = converted.get(field)
+        if isinstance(value, (dict, tag.Compound)) and "id" in value:
+            converted[field] = convert_entity_item_field(value)
+
+    for field in _ENTITY_ITEM_LIST_FIELDS:
+        value = converted.get(field)
+        if isinstance(value, (list, nbtlib.tag.List)):
+            new_items = []
+            for item in value:
+                if isinstance(item, (dict, tag.Compound)) and "id" in item:
+                    if "item" in item and isinstance(item["item"], (dict, tag.Compound)):
+                        # Slotted container-style item ({slot, item:{...}})
+                        new_items.append(convert_item_1_21_to_1_20(item))
+                    else:
+                        new_items.append(convert_legacy_item_format(item))
+                else:
+                    new_items.append(item)
+            converted[field] = tag.List[tag.Compound](new_items)
+
+    return tag.Compound(converted)
+
+
 def convert_block_entity(block_entity: Any) -> tag.Compound:
     """
     Convert a block entity from 1.21.1 to 1.20.1 format.
@@ -298,6 +370,21 @@ def convert_nbt_structure(input_path: str, output_path: str) -> bool:
                             converted_nbt = convert_block_entity(block_nbt)
                             block['nbt'] = converted_nbt
                             converted_count += 1
+
+        # Method 3: Convert item-bearing fields on entities (Item Frame, etc.)
+        if "entities" in nbt_data:
+            entities = nbt_data["entities"]
+            if isinstance(entities, (list, nbtlib.tag.List)):
+                converted_entities = []
+                for entity in entities:
+                    if isinstance(entity, (dict, tag.Compound)) and "nbt" in entity:
+                        entity_dict = dict(entity)
+                        entity_dict["nbt"] = convert_entity_nbt(entity["nbt"])
+                        converted_entities.append(tag.Compound(entity_dict))
+                        converted_count += 1
+                    else:
+                        converted_entities.append(entity)
+                nbt_data["entities"] = tag.List[tag.Compound](converted_entities)
 
         # Save the converted NBT file with deterministic output
         save_nbt_deterministic(nbt_data, output_path)
