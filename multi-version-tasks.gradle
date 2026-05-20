@@ -405,10 +405,26 @@ tasks.register('checkAll') {
             [name: 'cleanAll', task: 'cleanAll'],
             [name: 'validateResources', task: 'validateResources'],
             [name: 'validateTranslations', task: 'validateTranslations'],
+        ]
+
+        // Optional project-specific validation tasks. Defined via the
+        // 'checkall_extra_tasks' property (comma-separated task names) in
+        // gradle.properties; each one is inserted after validateTranslations
+        // and before buildAll. Skipped silently if the task isn't registered.
+        if (project.hasProperty('checkall_extra_tasks')) {
+            project.property('checkall_extra_tasks').toString().split(',').each {
+                def taskName = it.trim()
+                if (taskName && tasks.findByName(taskName)) {
+                    steps.add([name: taskName, task: taskName])
+                }
+            }
+        }
+
+        steps.addAll([
             [name: 'buildAll', task: 'buildAll'],
             [name: 'testAll', task: 'testAll'],
             [name: 'gameTestAll', task: 'gameTestAll'],
-        ]
+        ])
 
         def passed = []
         def failed = null
