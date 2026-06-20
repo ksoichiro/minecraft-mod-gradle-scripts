@@ -49,6 +49,22 @@ def platformsFor = { version ->
     return fabricOnlyVersions.contains(version) ? ['fabric'] : ['fabric', 'neoforge']
 }
 
+// Run a Gradle command in a subprocess, streaming its output to the console.
+// Gradle 9 removed Project.exec/javaexec, so a plain ProcessBuilder is used to
+// stay compatible with both Gradle 8 and 9.
+def runGradle = { List args ->
+    def gradlew = new File(projectDir, 'gradlew').absolutePath
+    def cmd = ([gradlew] + args.collect { it.toString() }) as List<String>
+    def proc = new ProcessBuilder(cmd)
+            .directory(projectDir)
+            .inheritIO()
+            .start()
+    def exitCode = proc.waitFor()
+    if (exitCode != 0) {
+        throw new GradleException("Command failed (exit ${exitCode}): ${cmd.join(' ')}")
+    }
+}
+
 def taskGroupName = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' build'
 def taskGroupTest = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' test'
 def taskGroupRun = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' run'
@@ -67,9 +83,7 @@ supportedVersions.each { version ->
         description = "Clean build outputs for Minecraft ${version}"
 
         doLast {
-            project.exec {
-                commandLine './gradlew', 'clean', "-Ptarget_mc_version=${version}"
-            }
+            runGradle(['clean', "-Ptarget_mc_version=${version}"])
         }
     }
 }
@@ -89,9 +103,7 @@ tasks.register('cleanAll') {
         releaseVersions.each { version ->
             logger.lifecycle(">>> Cleaning for Minecraft ${version}...")
 
-            project.exec {
-                commandLine './gradlew', 'clean', "-Ptarget_mc_version=${version}"
-            }
+            runGradle(['clean', "-Ptarget_mc_version=${version}"])
         }
 
         // Clean IDE-generated bin/ directories that can interfere with builds/tests
@@ -166,9 +178,7 @@ supportedVersions.each { version ->
         }
 
         doLast {
-            project.exec {
-                commandLine './gradlew', 'clean', 'build', "-Ptarget_mc_version=${version}", '-x', 'test'
-            }
+            runGradle(['clean', 'build', "-Ptarget_mc_version=${version}", '-x', 'test'])
         }
     }
 }
@@ -365,10 +375,7 @@ tasks.register('testAll') {
             logger.lifecycle('')
 
             try {
-                project.exec {
-                    commandLine './gradlew', ":common-${version}:test", "-Ptarget_mc_version=${version}"
-                    errorOutput = System.err
-                }
+                runGradle([":common-${version}:test", "-Ptarget_mc_version=${version}"])
                 logger.lifecycle("SUCCESS: Minecraft ${version}")
             } catch (Exception e) {
                 logger.error("FAILED: Minecraft ${version}")
@@ -462,10 +469,7 @@ tasks.register('checkAll') {
             logger.lifecycle('')
 
             try {
-                project.exec {
-                    commandLine './gradlew', step.task
-                    errorOutput = System.err
-                }
+                runGradle([step.task])
                 passed.add(step.name)
                 logger.lifecycle("SUCCESS: ${step.name}")
             } catch (Exception e) {
@@ -581,10 +585,7 @@ tasks.register('release') {
             logger.lifecycle(">>> Running ${step}...")
             logger.lifecycle('')
 
-            project.exec {
-                commandLine './gradlew', step
-                errorOutput = System.err
-            }
+            runGradle([step])
         }
 
         logger.lifecycle('')
