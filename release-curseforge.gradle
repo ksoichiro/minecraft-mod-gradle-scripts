@@ -19,6 +19,9 @@ tasks.register('releaseCurseForge') {
         def archivesName = project.property('archives_name')
         def modVersion = project.property('mod_version')
         def apiBase = 'https://minecraft.curseforge.com/api'
+        // When enabled, Fabric builds are also tagged as Quilt-compatible (Quilt loads
+        // Fabric mods). Off by default so existing projects are unaffected.
+        def quiltCompatible = project.findProperty('release_quilt_compatible')?.toString()?.toBoolean()
 
         def releaseDir = file("${rootDir}/build/release")
         // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
@@ -81,11 +84,22 @@ tasks.register('releaseCurseForge') {
 
             def changelog = project.ext.readChangelog.call(rootDir, jarModVersion)
 
+            def gameVersions = [gameVersionId, loaderVersionId]
+            // Quilt is a separate loader entry on CurseForge; add it for Fabric builds.
+            if (quiltCompatible && loader == 'fabric') {
+                def quiltVersionId = versionsJson.find { it.name == 'Quilt' }?.id
+                if (quiltVersionId) {
+                    gameVersions.add(quiltVersionId)
+                } else {
+                    logger.warn("Quilt loader version ID not found on CurseForge; skipping Quilt tag for ${jarFile.name}")
+                }
+            }
+
             def metadata = JsonOutput.toJson([
                 changelog: changelog,
                 changelogType: 'markdown',
                 displayName: "${projectName} ${jarModVersion}",
-                gameVersions: [gameVersionId, loaderVersionId],
+                gameVersions: gameVersions,
                 releaseType: project.ext.releaseChannel.call(jarModVersion)
             ])
 

@@ -141,6 +141,8 @@ release_project_name=My Mod
 hotfix_mc_versions=1.21.3=1.21.2
 
 # Versions that only support Fabric (no NeoForge)
+# Used only as a fallback when a version's props file does not declare
+# enabled_platforms (see below).
 fabric_only_mc_versions=1.20.1
 
 # Base directory for production run files (default: ${rootDir}/run-prod)
@@ -163,6 +165,24 @@ translation_versions=1.20.1,1.21.1,1.21.2,1.21.3
 translation_hotfix_versions=1.21.3=1.21.2
 ```
 
+#### Per-version platforms (`props/<version>.properties`)
+
+Each version's properties file may declare which loaders it supports:
+
+```properties
+# Any combination of fabric, neoforge, forge
+enabled_platforms=fabric,neoforge,forge
+```
+
+`collectJars`, `cleanAll`, and the `runClient<Loader><VERSION>` tasks use this list
+to know which platform modules exist for a version, enabling **Forge** support
+alongside Fabric/NeoForge. When a version's props file does not declare
+`enabled_platforms`, the legacy `fabric_only_mc_versions` model is used as a
+fallback (fabric, plus neoforge unless the version is fabric-only), so existing
+projects are unaffected.
+
+> GameTests (`gameTestAll`) cover Fabric/NeoForge only; Forge modules are skipped.
+
 #### Release properties (for release-modrinth/curseforge)
 
 ```properties
@@ -176,6 +196,9 @@ curseforge_project_id=1414198
 # Default Modrinth dependency IDs (override if needed):
 # modrinth_dep_architectury=lhGA9TYQ
 # modrinth_dep_fabric_api=P7dR8mSH
+
+# Also tag Fabric builds as Quilt-compatible on Modrinth/CurseForge (default: false)
+release_quilt_compatible=true
 ```
 
 API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TOKEN`.

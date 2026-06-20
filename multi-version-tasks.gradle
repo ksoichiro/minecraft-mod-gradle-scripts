@@ -27,6 +27,28 @@ if (project.hasProperty('fabric_only_mc_versions')) {
     fabricOnlyVersions = project.property('fabric_only_mc_versions').toString().split(',').collect { it.trim() }
 }
 
+// Resolve the enabled platforms (loaders) for a given Minecraft version.
+//
+// Priority:
+//   1. enabled_platforms in props/<version>.properties — an explicit, comma-separated
+//      list supporting any combination of fabric/neoforge/forge.
+//   2. Legacy fabric_only_mc_versions model (fabric, plus neoforge unless fabric-only).
+//
+// The fallback keeps projects that don't declare enabled_platforms (and never used
+// Forge) behaving exactly as before.
+def platformsFor = { version ->
+    def propsFile = file("${rootDir}/props/${version}.properties")
+    if (propsFile.exists()) {
+        def vp = new Properties()
+        propsFile.withInputStream { vp.load(it) }
+        def ep = vp.getProperty('enabled_platforms')
+        if (ep != null && !ep.trim().isEmpty()) {
+            return ep.split(',').collect { it.trim() }.findAll { it }
+        }
+    }
+    return fabricOnlyVersions.contains(version) ? ['fabric'] : ['fabric', 'neoforge']
+}
+
 def taskGroupName = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' build'
 def taskGroupTest = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' test'
 def taskGroupRun = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' run'
@@ -77,9 +99,8 @@ tasks.register('cleanAll') {
         def subprojects = []
         releaseVersions.each { version ->
             subprojects.add("common/${version}")
-            subprojects.add("fabric/${version}")
-            if (!fabricOnlyVersions.contains(version)) {
-                subprojects.add("neoforge/${version}")
+            platformsFor(version).each { platform ->
+                subprojects.add("${platform}/${version}")
             }
         }
         def deletedCount = 0
@@ -98,11 +119,12 @@ tasks.register('cleanAll') {
         // Clean Architectury Transformer runtime caches in run directories
         // These caches can cause "Unresolved compilation problems" errors when
         // stale transformed classes remain after code changes
+        // Forge does not use the Architectury Transformer, so only fabric/neoforge
+        // run directories are relevant here.
         def runDirs = []
         releaseVersions.each { version ->
-            runDirs.add("fabric/${version}/run")
-            if (!fabricOnlyVersions.contains(version)) {
-                runDirs.add("neoforge/${version}/run")
+            platformsFor(version).findAll { it in ['fabric', 'neoforge'] }.each { platform ->
+                runDirs.add("${platform}/${version}/run")
             }
         }
         def transformerDeletedCount = 0
@@ -259,7 +281,7 @@ tasks.register('buildAll') {
 
 supportedVersions.each { version ->
     def versionSuffix = version.replace('.', '_')
-    def loaders = fabricOnlyVersions.contains(version) ? ['fabric'] : ['fabric', 'neoforge']
+    def loaders = platformsFor(version)
 
     loaders.each { loader ->
         def loaderName = loader == 'neoforge' ? 'NeoForge' : loader.capitalize()
@@ -504,13 +526,12 @@ tasks.register('collectJars') {
         releaseDir.mkdirs()
 
         def collected = []
-        def platforms = ['fabric', 'neoforge']
 
         def archivesName = project.property('archives_name')
         def modVersion = project.property('mod_version')
 
         releaseVersions.each { version ->
-            platforms.each { platform ->
+            platformsFor(version).each { platform ->
                 def libsDir = file("${rootDir}/${platform}/${version}/build/libs")
                 if (!libsDir.exists()) {
                     logger.warn("SKIP: ${libsDir} does not exist (not built yet?)")
@@ -611,12 +632,16 @@ tasks.register('gameTestAll') {
                 }
             }
 
-            def tasks = fabricOnlyVersions.contains(version)
-                ? [':fabric:runGameTest']
-                : [':fabric:runGameTest', ':neoforge:runGameTestServer']
+            // GameTests are only defined for fabric/neoforge; Forge has no standard
+            // GameTest task here, so it is excluded.
+            def gtPlatforms = platformsFor(version).findAll { it in ['fabric', 'neoforge'] }
+            def tasks = gtPlatforms.collect {
+                it == 'neoforge' ? ':neoforge:runGameTestServer' : ':fabric:runGameTest'
+            }
+            processedVersions.add(version)
+            if (tasks.isEmpty()) return
             group.tasks = tasks
             gameTestGroups.add(group)
-            processedVersions.add(version)
         }
 
         def passed = java.util.Collections.synchronizedList([])
@@ -653,7 +678,7 @@ tasks.register('gameTestAll') {
 
                     // Clean stale world directories to avoid session.lock conflicts
                     // Use moduleVersion for directory path (hotfix versions use base version dir)
-                    ['fabric', 'neoforge'].each { loader ->
+                    group.tasks.collect { it.split(':')[1] }.each { loader ->
                         def worldDir = new File(projectDir, loader + '/' + moduleVersion + '/run/world')
                         if (worldDir.exists()) {
                             worldDir.deleteDir()

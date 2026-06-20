@@ -21,6 +21,9 @@ tasks.register('releaseModrinth') {
         def useArchitectury = project.hasProperty('architectury_api_version')
         def depArchitecturyId = project.findProperty('modrinth_dep_architectury') ?: 'lhGA9TYQ'
         def depFabricApiId = project.findProperty('modrinth_dep_fabric_api') ?: 'P7dR8mSH'
+        // When enabled, Fabric builds are also tagged as Quilt-compatible (Quilt loads
+        // Fabric mods). Off by default so existing projects are unaffected.
+        def quiltCompatible = project.findProperty('release_quilt_compatible')?.toString()?.toBoolean()
 
         def releaseDir = file("${rootDir}/build/release")
         // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
@@ -78,7 +81,7 @@ tasks.register('releaseModrinth') {
                 name: "${projectName} ${jarModVersion}",
                 version_number: jarModVersion,
                 version_type: project.ext.releaseChannel.call(jarModVersion),
-                loaders: [loader],
+                loaders: (quiltCompatible && loader == 'fabric') ? [loader, 'quilt'] : [loader],
                 game_versions: [gameVersion],
                 status: 'listed',
                 featured: false,
