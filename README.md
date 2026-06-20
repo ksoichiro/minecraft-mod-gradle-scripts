@@ -245,6 +245,36 @@ suffix (`-beta`, `-rc`, `-pre`, ...) → beta, no suffix → release.
 
 - `releaseCurseForge` - Release all JARs in `build/release/` to CurseForge (or `-Pjar=filename.jar` for a single JAR)
 
+## Caveats
+
+### Shared cross-version module directories
+
+`buildAll` (and therefore `release`) builds each Minecraft version
+concurrently in a **separate Gradle process**. Each process gets its own
+`--project-cache-dir`, but that isolates only the `.gradle` cache — **not**
+the per-subproject `build/` output directory.
+
+If your project has a subproject whose directory is **shared across multiple
+MC versions** (e.g. a `-base` module mapped to `<platform>/base`), concurrent
+`clean build` processes will race on the same `build/` output and fail
+intermittently with `Could not store compilation result`.
+
+**Required mitigation (consumer side):** give such shared modules a
+version-specific build directory in your root `build.gradle`:
+
+```gradle
+subprojects {
+    if (project.name.endsWith('-base')) {
+        layout.buildDirectory.set(
+            file("${projectDir}/build/${project.property('target_mc_version')}"))
+    }
+}
+```
+
+Version-specific modules (`<platform>/<version>`, `common/<version>`) already
+use per-version directories and need no change. `collectJars`/release tasks
+read those version modules, not `-base`, so the relocation is safe.
+
 ## License
 
 LGPL-3.0

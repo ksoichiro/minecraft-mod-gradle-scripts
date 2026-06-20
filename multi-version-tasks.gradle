@@ -190,6 +190,13 @@ supportedVersions.each { version ->
  * Note: Hotfix versions are excluded because they share modules with their base version.
  * The base version JAR files are compatible with hotfix versions.
  * Use gameTestAll to verify hotfix version runtime compatibility.
+ *
+ * Caveat: versions build concurrently in separate processes. --project-cache-dir
+ * isolates each process's .gradle cache but NOT per-subproject build/ output.
+ * Subprojects whose directory is shared across MC versions (e.g. a "-base" module)
+ * must be given a version-specific build directory in the consumer's build.gradle,
+ * or concurrent builds race with "Could not store compilation result". See README
+ * ("Shared cross-version module directories").
  */
 tasks.register('buildAll') {
     group = taskGroupName
