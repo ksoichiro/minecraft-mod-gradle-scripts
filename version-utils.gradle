@@ -1,0 +1,94 @@
+// Shared version-aware ordering for release JARs.
+// After applying this script, use: ext.sortJarsByVersion(jarFiles, jarPattern)
+//
+// Sorting JARs by name lexically puts "1.21.10" before "1.21.2", so the newest
+// Minecraft version is not uploaded last. Because CurseForge marks the most
+// recently uploaded file as the Main File, the latest version must come last.
+// These helpers compare versions numerically (segment by segment) and treat
+// pre-release suffixes (alpha/beta/rc) as lower than the released version.
+
+ext.sortJarsByVersion = { List jars, jarPattern ->
+    // Split a pre-release suffix into numeric/alphabetic tokens, e.g. "beta10" -> ["beta", 10].
+    def tokenizePre = { String s ->
+        def tokens = []
+        def mt = (s =~ /(\d+|[A-Za-z]+)/)
+        while (mt.find()) {
+            def g = mt.group(1)
+            tokens << (g ==~ /\d+/ ? (g as int) : g.toLowerCase())
+        }
+        tokens
+    }
+
+    // "1.21.2-beta1" -> [numbers: [1, 21, 2], pre: "beta1"].
+    def parse = { String version ->
+        def trimmed = (version ?: '').trim()
+        def m = (trimmed =~ /^(\d+(?:\.\d+)*)/)
+        def release = m ? m.group(1) : ''
+        def rest = trimmed.substring(release.length())
+        def pre = rest.replaceFirst(/^[._+\-]/, '')
+        def numbers = release ? release.split('\\.').collect { it as int } : []
+        [numbers: numbers, pre: pre]
+    }
+
+    def comparePre = { String a, String b ->
+        def ta = tokenizePre(a)
+        def tb = tokenizePre(b)
+        int len = Math.max(ta.size(), tb.size())
+        for (int i = 0; i < len; i++) {
+            // A shorter pre-release sorts first (1.0-beta < 1.0-beta.1).
+            if (i >= ta.size()) return -1
+            if (i >= tb.size()) return 1
+            def x = ta[i]
+            def y = tb[i]
+            if (x instanceof Integer && y instanceof Integer) {
+                if (x != y) return x <=> y
+            } else if (x instanceof Integer) {
+                return -1 // Numeric identifiers rank lower than alphanumeric ones.
+            } else if (y instanceof Integer) {
+                return 1
+            } else {
+                int c = (x as String) <=> (y as String)
+                if (c != 0) return c
+            }
+        }
+        0
+    }
+
+    def compareVersions = { String a, String b ->
+        def pa = parse(a)
+        def pb = parse(b)
+        def na = pa.numbers
+        def nb = pb.numbers
+        int len = Math.max(na.size(), nb.size())
+        for (int i = 0; i < len; i++) {
+            int va = i < na.size() ? na[i] : 0
+            int vb = i < nb.size() ? nb[i] : 0
+            if (va != vb) return va <=> vb
+        }
+        // Numeric parts equal: a release outranks a pre-release (1.0 > 1.0-beta).
+        if (pa.pre.isEmpty() && pb.pre.isEmpty()) return 0
+        if (pa.pre.isEmpty()) return 1
+        if (pb.pre.isEmpty()) return -1
+        comparePre(pa.pre, pb.pre)
+    }
+
+    // Order by game version, then mod version, then loader. Unmatched names go last by name.
+    def compareNames = { String n1, String n2 ->
+        def m1 = jarPattern.matcher(n1)
+        def m2 = jarPattern.matcher(n2)
+        boolean ok1 = m1.matches()
+        boolean ok2 = m2.matches()
+        if (!ok1 || !ok2) {
+            if (ok1 != ok2) return ok1 ? -1 : 1
+            return n1 <=> n2
+        }
+        // group(1)=mod version, group(2)=game version, group(3)=loader.
+        int c = compareVersions(m1.group(2), m2.group(2))
+        if (c != 0) return c
+        c = compareVersions(m1.group(1), m2.group(1))
+        if (c != 0) return c
+        m1.group(3) <=> m2.group(3)
+    }
+
+    jars.sort(false) { f1, f2 -> compareNames(f1.name, f2.name) }
+}

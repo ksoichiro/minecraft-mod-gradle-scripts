@@ -2,6 +2,7 @@ import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 
 apply from: "${buildscript.sourceFile.parentFile}/changelog-utils.gradle"
+apply from: "${buildscript.sourceFile.parentFile}/version-utils.gradle"
 
 tasks.register('releaseModrinth') {
     group = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' release'
@@ -28,7 +29,8 @@ tasks.register('releaseModrinth') {
         if (project.hasProperty('jar')) {
             jars.add(new File(releaseDir, project.property('jar')))
         } else {
-            releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') }?.sort()?.each { jars.add(it) }
+            def found = releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') } ?: []
+            project.ext.sortJarsByVersion.call(found, jarPattern).each { jars.add(it) }
         }
 
         if (jars.isEmpty()) {

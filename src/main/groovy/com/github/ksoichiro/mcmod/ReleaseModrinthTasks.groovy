@@ -31,7 +31,8 @@ class ReleaseModrinthTasks {
                 if (project.hasProperty('jar')) {
                     jars.add(new File(releaseDir, project.property('jar').toString()))
                 } else {
-                    releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') }?.sort()?.each { jars.add(it) }
+                    def found = releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') } ?: []
+                    VersionUtils.sortJars(found, jarPattern).each { jars.add(it) }
                 }
 
                 if (jars.isEmpty()) {

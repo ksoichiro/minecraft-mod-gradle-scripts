@@ -10,6 +10,7 @@ Reusable Gradle scripts for multi-version Minecraft mod development with Archite
 | `resource-validation.gradle` | JSON syntax validation and asset cross-reference checks (blockstate/model/texture) |
 | `prod-run.gradle` | Production-like environment runner for Fabric and NeoForge |
 | `changelog-utils.gradle` | Shared changelog extraction helper (used by release scripts) |
+| `version-utils.gradle` | Shared version-aware JAR ordering helper (used by release scripts) |
 | `release-modrinth.gradle` | Release JARs to Modrinth |
 | `release-curseforge.gradle` | Release JARs to CurseForge |
 | `convert_nbt_1_21_to_1_20.py` | NBT structure converter from 1.21.1 to 1.20.1 format (see [README_NBT_CONVERSION.md](README_NBT_CONVERSION.md)) |
