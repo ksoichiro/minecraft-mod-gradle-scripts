@@ -25,7 +25,8 @@ class ReleaseModrinthTasks {
                 def depFabricApiId = ext.releaseModrinth.depFabricApiId
 
                 def releaseDir = project.file("${project.rootDir}/build/release")
-                def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
+                // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
+                def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
                 def jars = []
                 if (project.hasProperty('jar')) {
@@ -78,7 +79,7 @@ class ReleaseModrinthTasks {
                         project_id: projectId,
                         name: "${projectName} ${jarModVersion}",
                         version_number: jarModVersion,
-                        version_type: 'release',
+                        version_type: VersionUtils.releaseChannel(jarModVersion),
                         loaders: [loader],
                         game_versions: [gameVersion],
                         status: 'listed',

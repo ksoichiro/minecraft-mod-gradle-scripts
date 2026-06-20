@@ -57,6 +57,20 @@ class VersionUtils {
         }
     }
 
+    /**
+     * Maps a mod version's pre-release suffix to a CurseForge/Modrinth release
+     * channel: "alpha" for {@code -alpha*}, "beta" for any other pre-release
+     * suffix ({@code -beta}, {@code -rc}, {@code -pre}, ...), and "release" when
+     * there is no suffix.
+     */
+    static String releaseChannel(String modVersion) {
+        def pre = parse(modVersion).pre
+        if (pre.isEmpty()) {
+            return 'release'
+        }
+        return pre.toLowerCase().startsWith('alpha') ? 'alpha' : 'beta'
+    }
+
     private static int compareJarNames(String n1, String n2, Pattern jarPattern) {
         def m1 = jarPattern.matcher(n1)
         def m2 = jarPattern.matcher(n2)

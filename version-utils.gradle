@@ -92,3 +92,16 @@ ext.sortJarsByVersion = { List jars, jarPattern ->
 
     jars.sort(false) { f1, f2 -> compareNames(f1.name, f2.name) }
 }
+
+// Maps a mod version's pre-release suffix to a CurseForge/Modrinth release
+// channel: "alpha" for -alpha*, "beta" for any other pre-release suffix
+// (-beta, -rc, -pre, ...), and "release" when there is no suffix.
+ext.releaseChannel = { String modVersion ->
+    def trimmed = (modVersion ?: '').trim()
+    def m = (trimmed =~ /^(\d+(?:\.\d+)*)/)
+    def release = m ? m.group(1) : ''
+    def rest = trimmed.substring(release.length())
+    def pre = rest.replaceFirst(/^[._+\-]/, '')
+    if (pre.isEmpty()) return 'release'
+    pre.toLowerCase().startsWith('alpha') ? 'alpha' : 'beta'
+}

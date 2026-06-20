@@ -61,6 +61,46 @@ class VersionUtilsTest extends Specification {
         ]
     }
 
+    @Unroll
+    def "releaseChannel(#modVersion) == #expected"() {
+        expect:
+        VersionUtils.releaseChannel(modVersion) == expected
+
+        where:
+        modVersion      || expected
+        '0.2.0'         || 'release'
+        '1.0.0'         || 'release'
+        '0.2.0-alpha'   || 'alpha'
+        '0.2.0-alpha.1' || 'alpha'
+        '0.2.0-beta'    || 'beta'
+        '0.2.0-beta.3'  || 'beta'
+        '0.2.0-rc1'     || 'beta'
+        '0.2.0-pre2'    || 'beta'
+        '0.2.0-1'       || 'beta'
+    }
+
+    def "sortJars handles a pre-release suffix on the mod version"() {
+        given:
+        def pattern = ~/mymod-(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
+        def jars = [
+                'mymod-0.2.0+1.21.1-fabric.jar',
+                'mymod-0.2.0-rc1+1.21.1-fabric.jar',
+                'mymod-0.2.0-beta+1.21.1-fabric.jar',
+                'mymod-0.2.0-alpha+1.21.1-fabric.jar',
+        ].collect { new File(it) }
+
+        when:
+        def sorted = VersionUtils.sortJars(jars, pattern as Pattern)
+
+        then:
+        sorted*.name == [
+                'mymod-0.2.0-alpha+1.21.1-fabric.jar',
+                'mymod-0.2.0-beta+1.21.1-fabric.jar',
+                'mymod-0.2.0-rc1+1.21.1-fabric.jar',
+                'mymod-0.2.0+1.21.1-fabric.jar',
+        ]
+    }
+
     def "sortJars breaks ties by mod version then loader"() {
         given:
         def pattern = ~/mymod-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/

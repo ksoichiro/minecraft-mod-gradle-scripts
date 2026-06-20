@@ -208,6 +208,12 @@ API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TO
 - `setupProdMods` - Copy built mod and dependencies to instance
 - `runProd` - Launch Minecraft in production-like environment
 
+JARs are uploaded in ascending version order (newest last) so the latest version
+becomes the platform's default/main file. A SemVer pre-release suffix on the mod
+version (e.g. `mod_version=0.2.0-beta`) is honored: it sorts below the released
+version and sets the release channel automatically — `-alpha*` → alpha, any other
+suffix (`-beta`, `-rc`, `-pre`, ...) → beta, no suffix → release.
+
 ### release-modrinth.gradle
 
 - `releaseModrinth` - Release all JARs in `build/release/` to Modrinth (or `-Pjar=filename.jar` for a single JAR)

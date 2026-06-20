@@ -23,7 +23,8 @@ class ReleaseCurseForgeTasks {
                 def apiBase = 'https://minecraft.curseforge.com/api'
 
                 def releaseDir = project.file("${project.rootDir}/build/release")
-                def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
+                // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
+                def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
                 def jars = []
                 if (project.hasProperty('jar')) {
@@ -87,7 +88,7 @@ class ReleaseCurseForgeTasks {
                         changelogType: 'markdown',
                         displayName: "${projectName} ${jarModVersion}",
                         gameVersions: [gameVersionId, loaderVersionId],
-                        releaseType: 'release'
+                        releaseType: VersionUtils.releaseChannel(jarModVersion)
                     ])
 
                     def boundary = "----GradleBoundary${System.currentTimeMillis()}"
