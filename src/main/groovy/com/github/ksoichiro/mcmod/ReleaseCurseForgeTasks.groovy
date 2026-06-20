@@ -68,6 +68,10 @@ class ReleaseCurseForgeTasks {
                         mcTypeId = versionTypes.find { it.name == "Minecraft ${mcMajor}" }?.id
                     }
                     if (!mcTypeId) {
+                        // CurseForge sometimes registers newer types without the "Minecraft " prefix (e.g. "26.2").
+                        mcTypeId = versionTypes.find { it.name == gameVersion }?.id
+                    }
+                    if (!mcTypeId) {
                         throw new GradleException("Could not find version type for Minecraft ${gameVersion} or ${mcMajor}")
                     }
 
