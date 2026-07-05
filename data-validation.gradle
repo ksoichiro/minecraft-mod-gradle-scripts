@@ -175,6 +175,50 @@ tasks.register('validateData') {
         }
         logger.lifecycle("  Checked ${recipeRefsChecked} recipe references")
 
+        // --- Check C: client items JSON coverage (1.21.4+) -------------------
+        if (project.hasProperty('client_items_roots')) {
+            logger.lifecycle("Checking client items JSON coverage...")
+            def clientRoots = project.property('client_items_roots').toString().split(',').collect {
+                file("${rootProject.projectDir}/${it.trim()}")
+            }
+            def clientExcluded = [] as Set
+            if (project.hasProperty('client_items_excluded_ids')) {
+                clientExcluded.addAll(project.property('client_items_excluded_ids').toString().split(',').collect { it.trim() })
+            }
+            // Item-form IDs: registered items plus every item model basename.
+            // The model union pulls in BlockItems; item-less blocks (wall
+            // torches, crops, plant stems) have no item model, so they do not
+            // produce false positives.
+            def sourceIds = new TreeSet(itemIds)
+            roots.each { r ->
+                def mdir = file("${r}/assets/${archivesName}/models/item")
+                if (mdir.exists()) {
+                    fileTree(dir: mdir, includes: ['*.json']).each { sourceIds << it.name.replace('.json', '') }
+                }
+            }
+            sourceIds.removeAll(clientExcluded)
+            int clientChecked = 0
+            clientRoots.each { cr ->
+                def itemsDir = file("${cr}/assets/${archivesName}/items")
+                def crRel = rootProject.projectDir.toPath().relativize(cr.toPath()).toString()
+                sourceIds.each { id ->
+                    clientChecked++
+                    if (!file("${itemsDir}/${id}.json").exists()) {
+                        errors << "Client items: '${id}' has no ${crRel}/assets/${archivesName}/items/${id}.json"
+                    }
+                }
+                if (itemsDir.exists()) {
+                    fileTree(dir: itemsDir, includes: ['*.json']).each { File f ->
+                        def base = f.name.replace('.json', '')
+                        if (!sourceIds.contains(base) && !clientExcluded.contains(base)) {
+                            errors << "Client items: orphan ${crRel}/assets/${archivesName}/items/${f.name} does not correspond to any known item ID"
+                        }
+                    }
+                }
+            }
+            logger.lifecycle("  Checked ${clientChecked} client item definitions across ${clientRoots.size()} roots (${sourceIds.size()} item-form IDs)")
+        }
+
         // --- report ---------------------------------------------------------
         if (errors.isEmpty()) {
             logger.lifecycle("Data validation passed.")
