@@ -2,6 +2,7 @@ import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 
 apply from: "${buildscript.sourceFile.parentFile}/changelog-utils.gradle"
+apply from: "${buildscript.sourceFile.parentFile}/version-utils.gradle"
 
 tasks.register('releaseCurseForge') {
     group = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' release'
@@ -18,15 +19,20 @@ tasks.register('releaseCurseForge') {
         def archivesName = project.property('archives_name')
         def modVersion = project.property('mod_version')
         def apiBase = 'https://minecraft.curseforge.com/api'
+        // When enabled, Fabric builds are also tagged as Quilt-compatible (Quilt loads
+        // Fabric mods). Off by default so existing projects are unaffected.
+        def quiltCompatible = project.findProperty('release_quilt_compatible')?.toString()?.toBoolean()
 
         def releaseDir = file("${rootDir}/build/release")
-        def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
+        // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
+        def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
         def jars = []
         if (project.hasProperty('jar')) {
             jars.add(new File(releaseDir, project.property('jar')))
         } else {
-            releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') }?.sort()?.each { jars.add(it) }
+            def found = releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') } ?: []
+            project.ext.sortJarsByVersion.call(found, jarPattern).each { jars.add(it) }
         }
 
         if (jars.isEmpty()) {
@@ -63,6 +69,10 @@ tasks.register('releaseCurseForge') {
                 mcTypeId = versionTypes.find { it.name == "Minecraft ${mcMajor}" }?.id
             }
             if (!mcTypeId) {
+                // CurseForge sometimes registers newer types without the "Minecraft " prefix (e.g. "26.2").
+                mcTypeId = versionTypes.find { it.name == gameVersion }?.id
+            }
+            if (!mcTypeId) {
                 throw new GradleException("Could not find version type for Minecraft ${gameVersion} or ${mcMajor}")
             }
 
@@ -78,12 +88,23 @@ tasks.register('releaseCurseForge') {
 
             def changelog = project.ext.readChangelog.call(rootDir, jarModVersion)
 
+            def gameVersions = [gameVersionId, loaderVersionId]
+            // Quilt is a separate loader entry on CurseForge; add it for Fabric builds.
+            if (quiltCompatible && loader == 'fabric') {
+                def quiltVersionId = versionsJson.find { it.name == 'Quilt' }?.id
+                if (quiltVersionId) {
+                    gameVersions.add(quiltVersionId)
+                } else {
+                    logger.warn("Quilt loader version ID not found on CurseForge; skipping Quilt tag for ${jarFile.name}")
+                }
+            }
+
             def metadata = JsonOutput.toJson([
                 changelog: changelog,
                 changelogType: 'markdown',
                 displayName: "${projectName} ${jarModVersion}",
-                gameVersions: [gameVersionId, loaderVersionId],
-                releaseType: 'release'
+                gameVersions: gameVersions,
+                releaseType: project.ext.releaseChannel.call(jarModVersion)
             ])
 
             def boundary = "----GradleBoundary${System.currentTimeMillis()}"

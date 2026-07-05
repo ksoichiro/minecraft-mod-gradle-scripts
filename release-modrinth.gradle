@@ -2,6 +2,7 @@ import groovy.json.JsonSlurper
 import groovy.json.JsonOutput
 
 apply from: "${buildscript.sourceFile.parentFile}/changelog-utils.gradle"
+apply from: "${buildscript.sourceFile.parentFile}/version-utils.gradle"
 
 tasks.register('releaseModrinth') {
     group = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' release'
@@ -20,15 +21,20 @@ tasks.register('releaseModrinth') {
         def useArchitectury = project.hasProperty('architectury_api_version')
         def depArchitecturyId = project.findProperty('modrinth_dep_architectury') ?: 'lhGA9TYQ'
         def depFabricApiId = project.findProperty('modrinth_dep_fabric_api') ?: 'P7dR8mSH'
+        // When enabled, Fabric builds are also tagged as Quilt-compatible (Quilt loads
+        // Fabric mods). Off by default so existing projects are unaffected.
+        def quiltCompatible = project.findProperty('release_quilt_compatible')?.toString()?.toBoolean()
 
         def releaseDir = file("${rootDir}/build/release")
-        def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
+        // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
+        def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
         def jars = []
         if (project.hasProperty('jar')) {
             jars.add(new File(releaseDir, project.property('jar')))
         } else {
-            releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') }?.sort()?.each { jars.add(it) }
+            def found = releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') } ?: []
+            project.ext.sortJarsByVersion.call(found, jarPattern).each { jars.add(it) }
         }
 
         if (jars.isEmpty()) {
@@ -74,8 +80,8 @@ tasks.register('releaseModrinth') {
                 project_id: projectId,
                 name: "${projectName} ${jarModVersion}",
                 version_number: jarModVersion,
-                version_type: 'release',
-                loaders: [loader],
+                version_type: project.ext.releaseChannel.call(jarModVersion),
+                loaders: (quiltCompatible && loader == 'fabric') ? [loader, 'quilt'] : [loader],
                 game_versions: [gameVersion],
                 status: 'listed',
                 featured: false,

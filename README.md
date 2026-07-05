@@ -11,6 +11,7 @@ Reusable Gradle scripts for multi-version Minecraft mod development with Archite
 | `data-validation.gradle` | Data-pack cross-reference checks (tag entries, recipe references, 1.21.4+ client items coverage) |
 | `prod-run.gradle` | Production-like environment runner for Fabric and NeoForge |
 | `changelog-utils.gradle` | Shared changelog extraction helper (used by release scripts) |
+| `version-utils.gradle` | Shared version-aware JAR ordering helper (used by release scripts) |
 | `release-modrinth.gradle` | Release JARs to Modrinth |
 | `release-curseforge.gradle` | Release JARs to CurseForge |
 | `convert_nbt_1_21_to_1_20.py` | NBT structure converter from 1.21.1 to 1.20.1 format (see [README_NBT_CONVERSION.md](README_NBT_CONVERSION.md)) |
@@ -141,6 +142,8 @@ release_project_name=My Mod
 hotfix_mc_versions=1.21.3=1.21.2
 
 # Versions that only support Fabric (no NeoForge)
+# Used only as a fallback when a version's props file does not declare
+# enabled_platforms (see below).
 fabric_only_mc_versions=1.20.1
 
 # Base directory for production run files (default: ${rootDir}/run-prod)
@@ -163,6 +166,24 @@ translation_versions=1.20.1,1.21.1,1.21.2,1.21.3
 translation_hotfix_versions=1.21.3=1.21.2
 ```
 
+#### Per-version platforms (`props/<version>.properties`)
+
+Each version's properties file may declare which loaders it supports:
+
+```properties
+# Any combination of fabric, neoforge, forge
+enabled_platforms=fabric,neoforge,forge
+```
+
+`collectJars`, `cleanAll`, and the `runClient<Loader><VERSION>` tasks use this list
+to know which platform modules exist for a version, enabling **Forge** support
+alongside Fabric/NeoForge. When a version's props file does not declare
+`enabled_platforms`, the legacy `fabric_only_mc_versions` model is used as a
+fallback (fabric, plus neoforge unless the version is fabric-only), so existing
+projects are unaffected.
+
+> GameTests (`gameTestAll`) cover Fabric/NeoForge only; Forge modules are skipped.
+
 #### Release properties (for release-modrinth/curseforge)
 
 ```properties
@@ -176,6 +197,9 @@ curseforge_project_id=1414198
 # Default Modrinth dependency IDs (override if needed):
 # modrinth_dep_architectury=lhGA9TYQ
 # modrinth_dep_fabric_api=P7dR8mSH
+
+# Also tag Fabric builds as Quilt-compatible on Modrinth/CurseForge (default: false)
+release_quilt_compatible=true
 ```
 
 API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TOKEN`.
@@ -208,6 +232,12 @@ API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TO
 - `setupProdMods` - Copy built mod and dependencies to instance
 - `runProd` - Launch Minecraft in production-like environment
 
+JARs are uploaded in ascending version order (newest last) so the latest version
+becomes the platform's default/main file. A SemVer pre-release suffix on the mod
+version (e.g. `mod_version=0.2.0-beta`) is honored: it sorts below the released
+version and sets the release channel automatically — `-alpha*` → alpha, any other
+suffix (`-beta`, `-rc`, `-pre`, ...) → beta, no suffix → release.
+
 ### release-modrinth.gradle
 
 - `releaseModrinth` - Release all JARs in `build/release/` to Modrinth (or `-Pjar=filename.jar` for a single JAR)
@@ -215,6 +245,36 @@ API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TO
 ### release-curseforge.gradle
 
 - `releaseCurseForge` - Release all JARs in `build/release/` to CurseForge (or `-Pjar=filename.jar` for a single JAR)
+
+## Caveats
+
+### Shared cross-version module directories
+
+`buildAll` (and therefore `release`) builds each Minecraft version
+concurrently in a **separate Gradle process**. Each process gets its own
+`--project-cache-dir`, but that isolates only the `.gradle` cache — **not**
+the per-subproject `build/` output directory.
+
+If your project has a subproject whose directory is **shared across multiple
+MC versions** (e.g. a `-base` module mapped to `<platform>/base`), concurrent
+`clean build` processes will race on the same `build/` output and fail
+intermittently with `Could not store compilation result`.
+
+**Required mitigation (consumer side):** give such shared modules a
+version-specific build directory in your root `build.gradle`:
+
+```gradle
+subprojects {
+    if (project.name.endsWith('-base')) {
+        layout.buildDirectory.set(
+            file("${projectDir}/build/${project.property('target_mc_version')}"))
+    }
+}
+```
+
+Version-specific modules (`<platform>/<version>`, `common/<version>`) already
+use per-version directories and need no change. `collectJars`/release tasks
+read those version modules, not `-base`, so the relocation is safe.
 
 ## License
 

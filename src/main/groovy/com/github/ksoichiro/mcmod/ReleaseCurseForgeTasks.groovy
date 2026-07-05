@@ -23,13 +23,15 @@ class ReleaseCurseForgeTasks {
                 def apiBase = 'https://minecraft.curseforge.com/api'
 
                 def releaseDir = project.file("${project.rootDir}/build/release")
-                def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
+                // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
+                def jarPattern = ~/${archivesName}-(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)\+(\d+(?:\.\d+)+)-([a-z]+)\.jar/
 
                 def jars = []
                 if (project.hasProperty('jar')) {
                     jars.add(new File(releaseDir, project.property('jar').toString()))
                 } else {
-                    releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') }?.sort()?.each { jars.add(it) }
+                    def found = releaseDir.listFiles()?.findAll { it.name.endsWith('.jar') } ?: []
+                    VersionUtils.sortJars(found, jarPattern).each { jars.add(it) }
                 }
 
                 if (jars.isEmpty()) {
@@ -66,6 +68,10 @@ class ReleaseCurseForgeTasks {
                         mcTypeId = versionTypes.find { it.name == "Minecraft ${mcMajor}" }?.id
                     }
                     if (!mcTypeId) {
+                        // CurseForge sometimes registers newer types without the "Minecraft " prefix (e.g. "26.2").
+                        mcTypeId = versionTypes.find { it.name == gameVersion }?.id
+                    }
+                    if (!mcTypeId) {
                         throw new GradleException("Could not find version type for Minecraft ${gameVersion} or ${mcMajor}")
                     }
 
@@ -86,7 +92,7 @@ class ReleaseCurseForgeTasks {
                         changelogType: 'markdown',
                         displayName: "${projectName} ${jarModVersion}",
                         gameVersions: [gameVersionId, loaderVersionId],
-                        releaseType: 'release'
+                        releaseType: VersionUtils.releaseChannel(jarModVersion)
                     ])
 
                     def boundary = "----GradleBoundary${System.currentTimeMillis()}"
