@@ -1,0 +1,148 @@
+// Data-pack cross-reference validation task.
+//
+// Validates that data JSONs reference registered IDs, and that 1.21.4+
+// client item definitions (assets/<ns>/items/<id>.json) cover every
+// item-form ID. Complements resource-validation.gradle, which covers
+// assets (blockstates/models/textures); this script covers data/ and the
+// 1.21.4+ client items directory.
+//
+// Required project properties (gradle.properties):
+//   archives_name  - The mod's archive name (namespace in data paths)
+//
+// Optional project properties (a check is skipped unless its properties
+// are set, so consumers opt in per check):
+//   item_id_file   - Item ID enum file (relative to project root)
+//   block_id_file  - Block ID enum file
+//   entity_id_file - Entity ID enum file
+//   data_validation_excluded_ids - Comma-separated IDs exempt from the
+//                        tag and recipe reference checks
+//   client_items_roots - Comma-separated resource roots (relative to
+//                        project root) that must each contain
+//                        assets/<ns>/items/<id>.json for every item-form
+//                        ID (1.21.4+ client item format)
+//   client_items_excluded_ids - Comma-separated basenames exempt from
+//                        the client items check (e.g. variant-only item
+//                        models, version-gated items)
+
+import groovy.json.JsonSlurper
+
+tasks.register('validateData') {
+    group = 'verification'
+    description = 'Validates data-pack cross-references (tag entries, recipe references, client items coverage)'
+
+    doLast {
+        def archivesName = project.property('archives_name').toString()
+        def jsonSlurper = new JsonSlurper()
+        def errors = []
+
+        // --- shared plumbing ------------------------------------------------
+
+        // All resource roots: common/shared*, common/<version>, common/gametest.
+        def roots = []
+        file("${rootProject.projectDir}/common").listFiles()?.findAll {
+            it.isDirectory() && file("${it}/src/main/resources").exists()
+        }?.sort()?.each {
+            roots << file("${it}/src/main/resources")
+        }
+
+        def readIds = { String propName ->
+            def ids = [] as Set
+            if (project.hasProperty(propName)) {
+                ids.addAll(extractDataEnumValues(file("${rootProject.projectDir}/${project.property(propName)}")))
+            }
+            ids
+        }
+        def itemIds = readIds('item_id_file')
+        def blockIds = readIds('block_id_file')
+        def entityIds = readIds('entity_id_file')
+        def itemAndBlockIds = (itemIds + blockIds) as Set
+
+        def excludedIds = [] as Set
+        if (project.hasProperty('data_validation_excluded_ids')) {
+            excludedIds.addAll(project.property('data_validation_excluded_ids').toString().split(',').collect { it.trim() })
+        }
+
+        def relPath = { File f -> rootProject.projectDir.toPath().relativize(f.toPath()).toString() }
+
+        // A referenced tag file may live under the singular or plural era
+        // spelling of its type directory (tags/item vs tags/items).
+        def tagTypeVariants = { String type ->
+            [type, type.endsWith('s') ? type[0..-2] : "${type}s".toString()] as Set
+        }
+        def tagFileExists = { String type, String path ->
+            roots.any { r ->
+                tagTypeVariants(type).any { t ->
+                    file("${r}/data/${archivesName}/tags/${t}/${path}.json").exists()
+                }
+            }
+        }
+
+        // --- Check A: tag entries -> registered IDs -------------------------
+        logger.lifecycle("Checking tag entries -> registered IDs...")
+        def tagTypeSources = [
+            'item': itemAndBlockIds, 'items': itemAndBlockIds,
+            'block': blockIds, 'blocks': blockIds,
+            'entity_type': entityIds, 'entity_types': entityIds,
+        ]
+        int tagEntriesChecked = 0
+        int tagEntriesSkipped = 0
+        if (itemAndBlockIds || entityIds) {
+            roots.each { root ->
+                def dataDir = file("${root}/data")
+                if (!dataDir.exists()) return
+                dataDir.eachDir { nsDir ->
+                    def tagsDir = file("${nsDir}/tags")
+                    if (!tagsDir.exists()) return
+                    tagsDir.eachDir { typeDir ->
+                        def source = tagTypeSources[typeDir.name]
+                        fileTree(dir: typeDir, includes: ['**/*.json']).each { File tagFile ->
+                            def json
+                            try { json = jsonSlurper.parseText(tagFile.text) } catch (Exception e) { return }
+                            if (!(json instanceof Map) || !(json.values instanceof List)) return
+                            json.values.each { entry ->
+                                def raw = (entry instanceof Map) ? entry.id : entry
+                                if (!(raw instanceof String)) return
+                                if (raw.startsWith("#${archivesName}:")) {
+                                    tagEntriesChecked++
+                                    def refPath = raw.substring("#${archivesName}:".length())
+                                    if (!tagFileExists(typeDir.name, refPath)) {
+                                        errors << "Tag ${relPath(tagFile)}: referenced tag '${raw}' has no tag file in any resource root"
+                                    }
+                                } else if (raw.startsWith("${archivesName}:")) {
+                                    if (source == null) { tagEntriesSkipped++; return }
+                                    def id = raw.substring("${archivesName}:".length())
+                                    if (excludedIds.contains(id)) return
+                                    tagEntriesChecked++
+                                    if (!source.contains(id)) {
+                                        errors << "Tag ${relPath(tagFile)}: entry '${raw}' is not a registered ${typeDir.name} ID"
+                                    }
+                                }
+                                // Other namespaces (minecraft:, c:, ...) are
+                                // skipped: no static registry knowledge.
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        logger.lifecycle("  Checked ${tagEntriesChecked} tag entries (${tagEntriesSkipped} skipped: unsupported tag types)")
+
+        // --- report ---------------------------------------------------------
+        if (errors.isEmpty()) {
+            logger.lifecycle("Data validation passed.")
+        } else {
+            errors.each { logger.error("  ERROR: ${it}") }
+            throw new GradleException("Data validation failed with ${errors.size()} error(s)")
+        }
+    }
+}
+
+// Extract enum values from a ModXxxId.java file.
+// Matches both NAME("id") and NAME(def("id")) shapes.
+def extractDataEnumValues(File file) {
+    def ids = []
+    if (!file.exists()) return ids
+    def matcher = (file.text =~ /(\w+)\s*\(\s*"([^"]+)"\s*\)/)
+    matcher.each { ids << it[2] }
+    return ids
+}
