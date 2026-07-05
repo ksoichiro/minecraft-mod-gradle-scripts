@@ -8,6 +8,7 @@ Reusable Gradle scripts for multi-version Minecraft mod development with Archite
 |------|-------------|
 | `multi-version-tasks.gradle` | Clean, build, test, run, and release tasks for all supported MC versions |
 | `resource-validation.gradle` | JSON syntax validation and asset cross-reference checks (blockstate/model/texture) |
+| `data-validation.gradle` | Data-pack cross-reference checks (tag entries, recipe references, 1.21.4+ client items coverage) |
 | `prod-run.gradle` | Production-like environment runner for Fabric and NeoForge |
 | `changelog-utils.gradle` | Shared changelog extraction helper (used by release scripts) |
 | `release-modrinth.gradle` | Release JARs to Modrinth |
