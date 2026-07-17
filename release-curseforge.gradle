@@ -43,6 +43,23 @@ tasks.register('releaseCurseForge') {
         def versionTypes = cfApiGet("${apiBase}/game/version-types", curseforgeToken)
         def versionsJson = cfApiGet("${apiBase}/game/versions", curseforgeToken)
 
+        // CurseForge requires at least one selection from the Environment version group
+        // (errorCode 1021). This mod runs on both sides, so tag Client and Server.
+        def envTypeId = versionTypes.find { it.name == 'Environment' }?.id
+        def environmentVersionIds = []
+        if (envTypeId) {
+            ['Client', 'Server'].each { envName ->
+                def envId = versionsJson.find { it.name == envName && it.gameVersionTypeID == envTypeId }?.id
+                if (envId) {
+                    environmentVersionIds.add(envId)
+                } else {
+                    logger.warn("CurseForge Environment version '${envName}' not found; skipping")
+                }
+            }
+        } else {
+            logger.warn('CurseForge Environment version type not found; uploading without environment tags')
+        }
+
         jars.each { jarFile ->
             def matcher = jarPattern.matcher(jarFile.name)
             if (!matcher.matches()) {
@@ -88,7 +105,7 @@ tasks.register('releaseCurseForge') {
 
             def changelog = project.ext.readChangelog.call(rootDir, jarModVersion)
 
-            def gameVersions = [gameVersionId, loaderVersionId]
+            def gameVersions = [gameVersionId, loaderVersionId] + environmentVersionIds
             // Quilt is a separate loader entry on CurseForge; add it for Fabric builds.
             if (quiltCompatible && loader == 'fabric') {
                 def quiltVersionId = versionsJson.find { it.name == 'Quilt' }?.id
