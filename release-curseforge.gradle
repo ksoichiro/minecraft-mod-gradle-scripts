@@ -22,6 +22,17 @@ tasks.register('releaseCurseForge') {
         // When enabled, Fabric builds are also tagged as Quilt-compatible (Quilt loads
         // Fabric mods). Off by default so existing projects are unaffected.
         def quiltCompatible = project.findProperty('release_quilt_compatible')?.toString()?.toBoolean()
+        // CurseForge rejects uploads that omit the Environment version group (error 1021).
+        // Deliberately no default: guessing would publish a mod tagged for the wrong side,
+        // so each project must state it.
+        def environmentNames = (project.findProperty('release_curseforge_environments')?.toString() ?: '')
+                .split(',').collect { it.trim() }.findAll { it }
+        if (environmentNames.isEmpty()) {
+            throw new GradleException(
+                    'release_curseforge_environments is not set. CurseForge requires at least one entry ' +
+                    'from the Environment version group. Set it in gradle.properties, e.g. ' +
+                    'release_curseforge_environments=Client (comma-separated; CurseForge names: Client, Server).')
+        }
 
         def releaseDir = file("${rootDir}/build/release")
         // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
@@ -43,21 +54,15 @@ tasks.register('releaseCurseForge') {
         def versionTypes = cfApiGet("${apiBase}/game/version-types", curseforgeToken)
         def versionsJson = cfApiGet("${apiBase}/game/versions", curseforgeToken)
 
-        // CurseForge requires at least one selection from the Environment version group
-        // (errorCode 1021). This mod runs on both sides, so tag Client and Server.
         def envTypeId = versionTypes.find { it.name == 'Environment' }?.id
-        def environmentVersionIds = []
-        if (envTypeId) {
-            ['Client', 'Server'].each { envName ->
-                def envId = versionsJson.find { it.name == envName && it.gameVersionTypeID == envTypeId }?.id
-                if (envId) {
-                    environmentVersionIds.add(envId)
-                } else {
-                    logger.warn("CurseForge Environment version '${envName}' not found; skipping")
-                }
+        def environmentVersionIds = environmentNames.collect { envName ->
+            def envId = versionsJson.find {
+                it.name == envName && (envTypeId == null || it.gameVersionTypeID == envTypeId)
+            }?.id
+            if (!envId) {
+                throw new GradleException("Could not find CurseForge version ID for environment '${envName}'")
             }
-        } else {
-            logger.warn('CurseForge Environment version type not found; uploading without environment tags')
+            envId
         }
 
         jars.each { jarFile ->

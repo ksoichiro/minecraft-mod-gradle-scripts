@@ -72,6 +72,9 @@ mcmod {
     releaseCurseForge {
         enabled = false
         // projectId = '1414198'
+        // Required by CurseForge (Environment version group). No default on purpose:
+        // an incorrect guess would publish the mod tagged for the wrong side.
+        // environments = ['Client']
     }
 }
 ```
@@ -200,6 +203,12 @@ curseforge_project_id=1414198
 
 # Also tag Fabric builds as Quilt-compatible on Modrinth/CurseForge (default: false)
 release_quilt_compatible=true
+
+# CurseForge Environment version group (comma-separated: Client, Server).
+# Required — CurseForge rejects uploads without it (error 1021: "You must select at least
+# one version from the environment group of versions"). No default on purpose: an incorrect
+# guess would publish the mod tagged for the wrong side.
+release_curseforge_environments=Client
 ```
 
 API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TOKEN`.

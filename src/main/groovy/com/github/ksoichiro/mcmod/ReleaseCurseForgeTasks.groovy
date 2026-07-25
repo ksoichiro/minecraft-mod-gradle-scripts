@@ -21,6 +21,13 @@ class ReleaseCurseForgeTasks {
                 def projectName = ext.projectDisplayName
                 def archivesName = ext.archivesName
                 def apiBase = 'https://minecraft.curseforge.com/api'
+                def environmentNames = (ext.releaseCurseForge.environments ?: []).collect { it.trim() }.findAll { it }
+                if (environmentNames.isEmpty()) {
+                    throw new GradleException(
+                            'releaseCurseForge.environments is not set. CurseForge requires at least one entry ' +
+                            "from the Environment version group. Configure it, e.g. " +
+                            "releaseCurseForge { environments = ['Client'] } (CurseForge names: Client, Server).")
+                }
 
                 def releaseDir = project.file("${project.rootDir}/build/release")
                 // group(1) mod version allows an optional SemVer pre-release suffix (e.g. 0.2.0-beta).
@@ -41,6 +48,17 @@ class ReleaseCurseForgeTasks {
                 project.logger.lifecycle("Fetching CurseForge game version types...")
                 def versionTypes = cfApiGet("${apiBase}/game/version-types", curseforgeToken)
                 def versionsJson = cfApiGet("${apiBase}/game/versions", curseforgeToken)
+
+                def envTypeId = versionTypes.find { it.name == 'Environment' }?.id
+                def environmentVersionIds = environmentNames.collect { envName ->
+                    def envId = versionsJson.find {
+                        it.name == envName && (envTypeId == null || it.gameVersionTypeID == envTypeId)
+                    }?.id
+                    if (!envId) {
+                        throw new GradleException("Could not find CurseForge version ID for environment '${envName}'")
+                    }
+                    envId
+                }
 
                 jars.each { jarFile ->
                     def matcher = jarPattern.matcher(jarFile.name)
@@ -91,7 +109,7 @@ class ReleaseCurseForgeTasks {
                         changelog: changelog,
                         changelogType: 'markdown',
                         displayName: "${projectName} ${jarModVersion}",
-                        gameVersions: [gameVersionId, loaderVersionId],
+                        gameVersions: [gameVersionId, loaderVersionId] + environmentVersionIds,
                         releaseType: VersionUtils.releaseChannel(jarModVersion)
                     ])
 

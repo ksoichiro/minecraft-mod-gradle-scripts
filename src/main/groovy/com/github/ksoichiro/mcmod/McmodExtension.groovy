@@ -75,6 +75,10 @@ class McmodExtension {
     static class ReleaseCurseForgeExtension {
         boolean enabled = false
         String projectId
+        // CurseForge rejects uploads that omit the Environment version group (error 1021).
+        // Deliberately no default: guessing would publish a mod tagged for the wrong side.
+        // CurseForge names: 'Client', 'Server'.
+        List<String> environments
     }
 
     static class NbtConversionExtension {
