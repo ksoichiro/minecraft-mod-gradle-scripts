@@ -1,5 +1,6 @@
 package com.github.ksoichiro.mcmod
 
+import net.querz.nbt.io.NBTDeserializer
 import net.querz.nbt.io.NBTUtil
 import net.querz.nbt.io.NamedTag
 import net.querz.nbt.tag.CompoundTag
@@ -61,6 +62,30 @@ class DefaultNbtConverterTest extends Specification {
 
         then:
         output1 == output2
+    }
+
+    def "output is a complete gzip stream that standard readers accept"() {
+        given:
+        def root = new CompoundTag()
+        root.putInt("DataVersion", 3953)
+        root.putString("author", "test")
+        def inputBytes = nbtToBytes(root)
+
+        when:
+        def outputBytes = new DefaultNbtConverter().convert(inputBytes, 3465)
+
+        then:
+        // Querz's own reader tolerates a gzip stream with no deflate trailer,
+        // so a round trip through this library cannot detect a truncated file.
+        // Decompress with the JDK reader instead, which is what Minecraft and
+        // every other gzip consumer effectively does.
+        def decompressed = new java.util.zip.GZIPInputStream(
+                new ByteArrayInputStream(outputBytes)).bytes
+        // The payload must also be the complete NBT document, not just a
+        // non-empty prefix that happened to decompress.
+        def reparsed = new NBTDeserializer(false).fromBytes(decompressed).getTag() as CompoundTag
+        reparsed.getInt("DataVersion") == 3465
+        reparsed.getString("author") == "test"
     }
 
     // Helper: CompoundTag -> gzip-compressed bytes
