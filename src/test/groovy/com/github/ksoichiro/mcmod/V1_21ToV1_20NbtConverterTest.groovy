@@ -77,6 +77,67 @@ class V1_21ToV1_20NbtConverterTest extends Specification {
         tagData.getString("foo") == "bar"
     }
 
+    def "converts the singular Item of a block entity"() {
+        given:
+        // A decorated pot / jukebox / lectern stores one stack in "Item", not in "Items".
+        def itemData = new CompoundTag()
+        itemData.putString("id", "minecraft:music_disc_cat")
+        itemData.putInt("count", 1)
+
+        def blockEntity = new CompoundTag()
+        blockEntity.putString("id", "minecraft:jukebox")
+        blockEntity.put("Item", itemData)
+
+        def root = createStructureWithBlockEntities([blockEntity])
+        def inputBytes = nbtToBytes(root)
+
+        when:
+        def converter = new V1_21ToV1_20NbtConverter()
+        def outputBytes = converter.convert(inputBytes, 3465)
+
+        then:
+        def result = bytesToNbt(outputBytes)
+        def resultBe = result.getListTag("block_entities").get(0) as CompoundTag
+        def resultItem = resultBe.getCompoundTag("Item")
+
+        // 1.20.1 format: {id: "minecraft:music_disc_cat", Count: 1b}
+        resultItem.getString("id") == "minecraft:music_disc_cat"
+        resultItem.getByte("Count") == (byte) 1
+        // Fields the converter does not touch are carried over untouched.
+        resultBe.getString("id") == "minecraft:jukebox"
+    }
+
+    def "converts the singular Item of an inline blocks[].nbt entry"() {
+        given:
+        def itemData = new CompoundTag()
+        itemData.putString("id", "minecraft:brick")
+        itemData.putInt("count", 1)
+
+        def blockNbt = new CompoundTag()
+        blockNbt.put("Item", itemData)
+
+        def block = new CompoundTag()
+        block.put("nbt", blockNbt)
+        def blocks = new ListTag<>(CompoundTag.class)
+        blocks.add(block)
+
+        def root = new CompoundTag()
+        root.putInt("DataVersion", 3953)
+        root.put("blocks", blocks)
+        def inputBytes = nbtToBytes(root)
+
+        when:
+        def converter = new V1_21ToV1_20NbtConverter()
+        def outputBytes = converter.convert(inputBytes, 3465)
+
+        then:
+        def result = bytesToNbt(outputBytes)
+        def resultBlock = result.getListTag("blocks").get(0) as CompoundTag
+        def resultItem = resultBlock.getCompoundTag("nbt").getCompoundTag("Item")
+        resultItem.getString("id") == "minecraft:brick"
+        resultItem.getByte("Count") == (byte) 1
+    }
+
     def "converts enchantments in components"() {
         given:
         def levels = new CompoundTag()

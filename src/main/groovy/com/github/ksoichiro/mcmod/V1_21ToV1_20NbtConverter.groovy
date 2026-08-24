@@ -40,7 +40,7 @@ class V1_21ToV1_20NbtConverter implements NbtConverter {
                     def block = blocks.get(i) as CompoundTag
                     if (block.containsKey("nbt")) {
                         def blockNbt = block.getCompoundTag("nbt")
-                        if (blockNbt.containsKey("Items")) {
+                        if (blockNbt.containsKey("Items") || blockNbt.containsKey("Item")) {
                             block.put("nbt", convertBlockEntity(blockNbt))
                         }
                     }
@@ -66,29 +66,36 @@ class V1_21ToV1_20NbtConverter implements NbtConverter {
     }
 
     private static CompoundTag convertBlockEntity(CompoundTag blockEntity) {
-        if (!blockEntity.containsKey("Items")) {
-            return blockEntity
-        }
-        def items = blockEntity.getListTag("Items")
-        if (items == null || items.size() == 0) {
-            return blockEntity
+        def result = new CompoundTag()
+        blockEntity.entrySet().forEach { entry -> result.put(entry.getKey(), entry.getValue()) }
+
+        def items = blockEntity.containsKey("Items") ? blockEntity.getListTag("Items") : null
+        if (items != null && items.size() > 0) {
+            def convertedItems = new ListTag<>(CompoundTag.class)
+            for (int i = 0; i < items.size(); i++) {
+                def item = items.get(i) as CompoundTag
+                if (item.containsKey("item")) {
+                    // New 1.21.1 format: {slot, item: {id, count, components}}
+                    convertedItems.add(convertItem121To120(item))
+                } else {
+                    // Legacy/mixed format: {Slot, id, count}
+                    convertedItems.add(convertLegacyItemFormat(item))
+                }
+            }
+            result.put("Items", convertedItems)
         }
 
-        def convertedItems = new ListTag<>(CompoundTag.class)
-        for (int i = 0; i < items.size(); i++) {
-            def item = items.get(i) as CompoundTag
-            if (item.containsKey("item")) {
-                // New 1.21.1 format: {slot, item: {id, count, components}}
-                convertedItems.add(convertItem121To120(item))
-            } else {
-                // Legacy/mixed format: {Slot, id, count}
-                convertedItems.add(convertLegacyItemFormat(item))
+        // Block entities that hold a single stack rather than an inventory -- a decorated
+        // pot, a jukebox with a disc in it, a lectern with a book -- store it in a singular
+        // "Item" field: {id, count, components}. Without this they keep the 1.21 shape and
+        // the contents are dropped when the older game reads the structure.
+        if (blockEntity.containsKey("Item")) {
+            def item = blockEntity.getCompoundTag("Item")
+            if (item != null) {
+                result.put("Item", convertSingleItem(item))
             }
         }
 
-        def result = new CompoundTag()
-        blockEntity.entrySet().forEach { entry -> result.put(entry.getKey(), entry.getValue()) }
-        result.put("Items", convertedItems)
         return result
     }
 

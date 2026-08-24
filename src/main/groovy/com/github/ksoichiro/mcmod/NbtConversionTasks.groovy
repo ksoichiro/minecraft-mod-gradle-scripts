@@ -22,6 +22,13 @@ class NbtConversionTasks {
             description = "Converts NBT structure files from ${nbtExt.sourceVersion} to ${nbtExt.targetVersion}"
 
             inputs.dir(inputDir).optional()
+            // The version pair decides both the converter and the DataVersion stamped into
+            // every file, but neither is visible in the input directory. Without them as
+            // inputs, editing targetVersion leaves the task UP-TO-DATE and ships structures
+            // carrying the previous version's stamp.
+            inputs.property('sourceVersion', nbtExt.sourceVersion)
+            inputs.property('targetVersion', nbtExt.targetVersion)
+            inputs.property('converterClass', nbtExt.converterClass?.name ?: '')
             outputs.dir(outputDir)
 
             doLast {
