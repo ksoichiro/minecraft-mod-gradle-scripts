@@ -79,13 +79,15 @@ class V1_21ToV1_20NbtConverterTest extends Specification {
 
     def "converts the singular Item of a block entity"() {
         given:
-        // A decorated pot / jukebox / lectern stores one stack in "Item", not in "Items".
+        // "Item" carries a single stack in the shape item frames use, rather than an
+        // "Items" inventory. Vanilla block entities use other keys for their single
+        // stack, so this covers the field itself rather than a specific block.
         def itemData = new CompoundTag()
         itemData.putString("id", "minecraft:music_disc_cat")
         itemData.putInt("count", 1)
 
         def blockEntity = new CompoundTag()
-        blockEntity.putString("id", "minecraft:jukebox")
+        blockEntity.putString("CustomName", "keep me")
         blockEntity.put("Item", itemData)
 
         def root = createStructureWithBlockEntities([blockEntity])
@@ -104,7 +106,31 @@ class V1_21ToV1_20NbtConverterTest extends Specification {
         resultItem.getString("id") == "minecraft:music_disc_cat"
         resultItem.getByte("Count") == (byte) 1
         // Fields the converter does not touch are carried over untouched.
-        resultBe.getString("id") == "minecraft:jukebox"
+        resultBe.getString("CustomName") == "keep me"
+    }
+
+    def "leaves a block entity with an empty Items list untouched"() {
+        given:
+        // convertBlockEntity used to return the original instance in this case, and now
+        // always returns a copy. The copy has to carry every field over unchanged --
+        // including the empty list, whose element type must not be rewritten.
+        def blockEntity = new CompoundTag()
+        blockEntity.putString("CustomName", "keep me")
+        blockEntity.put("Items", new ListTag<>(CompoundTag.class))
+
+        def root = createStructureWithBlockEntities([blockEntity])
+        def inputBytes = nbtToBytes(root)
+
+        when:
+        def converter = new V1_21ToV1_20NbtConverter()
+        def outputBytes = converter.convert(inputBytes, 3465)
+
+        then:
+        def result = bytesToNbt(outputBytes)
+        def resultBe = result.getListTag("block_entities").get(0) as CompoundTag
+        resultBe.size() == 2
+        resultBe.getString("CustomName") == "keep me"
+        resultBe.getListTag("Items").size() == 0
     }
 
     def "converts the singular Item of an inline blocks[].nbt entry"() {

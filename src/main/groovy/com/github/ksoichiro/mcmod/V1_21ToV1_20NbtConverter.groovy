@@ -85,10 +85,12 @@ class V1_21ToV1_20NbtConverter implements NbtConverter {
             result.put("Items", convertedItems)
         }
 
-        // Block entities that hold a single stack rather than an inventory -- a decorated
-        // pot, a jukebox with a disc in it, a lectern with a book -- store it in a singular
-        // "Item" field: {id, count, components}. Without this they keep the 1.21 shape and
-        // the contents are dropped when the older game reads the structure.
+        // A singular "Item" field holds one stack instead of an inventory, in the shape
+        // item frames use: {id, count, components}. Vanilla block entities that hold a
+        // single stack keep it under other keys -- "item" for a decorated pot or a
+        // brushable block, "RecordItem" for a jukebox, "Book" for a lectern -- so this
+        // branch is here to match convertEntityNbt and the python converter it replaces,
+        // not because vanilla writes "Item" on a block entity today.
         if (blockEntity.containsKey("Item")) {
             def item = blockEntity.getCompoundTag("Item")
             if (item != null) {
