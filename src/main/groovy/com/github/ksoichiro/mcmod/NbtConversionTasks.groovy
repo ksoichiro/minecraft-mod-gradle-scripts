@@ -82,9 +82,12 @@ class NbtConversionTasks {
 
         // Auto-select based on version pair
         def sourceMajorMinor = majorMinor(ext.sourceVersion)
-        def targetMajorMinor = majorMinor(ext.targetVersion)
 
-        if (sourceMajorMinor == '1.21' && targetMajorMinor == '1.20') {
+        // The item format changed in 1.20.5 (data components replaced item tags), so a
+        // 1.21 source needs the same conversion for every target below that boundary --
+        // not just the 1.20.x line. Compare data versions so the boundary is explicit and
+        // targets like 1.16.5 are covered.
+        if (sourceMajorMinor == '1.21' && getDataVersion(ext.targetVersion) < DATA_VERSION_1_20_5) {
             return new V1_21ToV1_20NbtConverter()
         }
 
@@ -99,11 +102,18 @@ class NbtConversionTasks {
         return version
     }
 
+    /** DataVersion of 1.20.5, where items moved from NBT tags to data components. */
+    private static final int DATA_VERSION_1_20_5 = 3837
+
     /**
      * Map Minecraft version strings to DataVersion integers.
      * See: https://minecraft.wiki/w/Data_version
      */
     private static final Map<String, Integer> DATA_VERSIONS = [
+        '1.16.5': 2586,
+        '1.17.1': 2730,
+        '1.18.2': 2975,
+        '1.19.2': 3120,
         '1.20'  : 3463,
         '1.20.1': 3465,
         '1.20.2': 3578,
