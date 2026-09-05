@@ -469,7 +469,7 @@ if (project.name == 'fabric') {
     tasks.register('setupProdMods') {
         group = taskGroupName
         description = "Copy built mod JAR and dependencies to mods/ for Fabric ${mcVersion}"
-        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : (tasks.findByName('shadowJar') ? 'shadowJar' : 'jar')
         dependsOn modJarTaskName
 
         doLast {
@@ -679,7 +679,7 @@ if (project.name == 'neoforge') {
     tasks.register('setupProdMods') {
         group = taskGroupName
         description = "Copy built mod JAR and dependencies to mods/ for NeoForge ${mcVersion}"
-        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : (tasks.findByName('shadowJar') ? 'shadowJar' : 'jar')
         dependsOn modJarTaskName
 
         doLast {
@@ -881,7 +881,7 @@ if (project.name == 'forge') {
     tasks.register('setupProdMods') {
         group = taskGroupName
         description = "Copy built mod JAR and dependencies to mods/ for Forge ${mcVersion}"
-        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+        def modJarTaskName = tasks.findByName('remapJar') ? 'remapJar' : (tasks.findByName('shadowJar') ? 'shadowJar' : 'jar')
         dependsOn modJarTaskName
 
         doLast {
