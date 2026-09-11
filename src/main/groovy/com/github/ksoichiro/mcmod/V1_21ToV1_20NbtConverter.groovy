@@ -201,6 +201,19 @@ class V1_21ToV1_20NbtConverter implements NbtConverter {
             }
         }
 
+        def id = nbt.getString("id")
+        // Current painting templates use `variant` and a horizontal `facing`.
+        // Legacy versions require `Motive` and call the same horizontal value
+        // `Facing`. This is distinct from item frames' six-direction Facing ID.
+        if (id == "minecraft:painting") {
+            if (nbt.containsKey("variant")) {
+                result.putString("Motive", nbt.getString("variant"))
+            }
+            if (nbt.containsKey("facing")) {
+                result.putByte("Facing", nbt.getByte("facing"))
+            }
+        }
+
         return result
     }
 
