@@ -138,7 +138,9 @@ class ProdRunTasks {
             project.tasks.register('setupProdMods') {
                 group = taskGroupName
                 description = "Copy built mod JAR and dependencies to mods/ for Fabric ${mcVersion}"
-                def modJarTaskName = project.tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+                def modJarTaskName = project.tasks.findByName('transformShadowJar') ? 'transformShadowJar'
+                    : project.tasks.findByName('remapJar') ? 'remapJar'
+                    : project.tasks.findByName('shadowJar') ? 'shadowJar' : 'jar'
                 dependsOn modJarTaskName
 
                 doLast {
@@ -234,6 +236,10 @@ class ProdRunTasks {
 
                     // JVM arguments
                     jvmArgs '-Xmx2G', '-Xms512M'
+                    // Newer Fabric profiles select the Minecraft entrypoint through JVM
+                    // properties such as -DFabricMcEmu. Without these, Knot puts loader
+                    // implementation classes in the target class loader.
+                    jvmArgs(profile.arguments?.jvm ?: [])
 
                     // macOS requires -XstartOnFirstThread for LWJGL/OpenGL
                     if (getMojangOs() == 'osx') {
@@ -346,7 +352,9 @@ class ProdRunTasks {
             project.tasks.register('setupProdMods') {
                 group = taskGroupName
                 description = "Copy built mod JAR and dependencies to mods/ for NeoForge ${mcVersion}"
-                def modJarTaskName = project.tasks.findByName('remapJar') ? 'remapJar' : 'jar'
+                def modJarTaskName = project.tasks.findByName('transformShadowJar') ? 'transformShadowJar'
+                    : project.tasks.findByName('remapJar') ? 'remapJar'
+                    : project.tasks.findByName('shadowJar') ? 'shadowJar' : 'jar'
                 dependsOn modJarTaskName
 
                 doLast {
