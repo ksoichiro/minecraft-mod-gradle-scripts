@@ -1,13 +1,23 @@
 // Production run support for testing built Mod JARs in a near-production environment.
-// Supports Fabric and NeoForge loaders.
+// Supports Fabric and NeoForge loaders (Forge < 50 is unsupported, see below).
 //
 // Usage:
 //   ./gradlew :fabric:runProd -Ptarget_mc_version=1.21.1
 //   ./gradlew :neoforge:runProd -Ptarget_mc_version=1.21.1
 //
+// Headless world-creation smoke test (no display required; recommended after
+// Mixin config changes or when adding a new Minecraft version, see CLAUDE.md
+// "Mixin Configuration" / "Multi-Version Support"):
+//   ./gradlew :fabric:prodSmokeTest -Ptarget_mc_version=1.21.1
+//   ./gradlew :neoforge:prodSmokeTest -Ptarget_mc_version=1.21.1
+//
 // Optional project properties:
 //   prod_base_dir        - Base directory for production run files (default: ${rootDir}/run-prod)
 //   release_project_name - Project display name for task groups (defaults to project.name)
+//
+// prodSmokeTest uses a build-relative directory (build/prod-smoke/<loader>-<version>),
+// separate from prod_base_dir, so it never touches manually-verified runProd state.
+// It is cleaned up by clean<version>/cleanAll like any other build output.
 
 import groovy.json.JsonSlurper
 
@@ -348,6 +358,105 @@ ext.prodGetInstallerLibraryFiles = { mergedJson, File installDir ->
     return files
 }
 
+// --- Helper: Directory for prodSmokeTest's per-version server install ---
+// Build-relative (not prod_base_dir), so it never collides with a manually
+// verified runProd instance and is cleaned up by clean<version>/cleanAll.
+ext.prodSmokeTestDir = { String loaderName ->
+    file("${layout.buildDirectory.get().asFile}/prod-smoke/${loaderName}-${mcVersion}")
+}
+
+// --- Constant: world save directory name used by prodWriteServerConfig's
+// server.properties (level-name). Shared with prodResetSmokeTestState so the
+// two never drift apart and leave a stale world un-wiped between runs.
+ext.PROD_SMOKE_TEST_LEVEL_NAME = 'smoketest'
+
+// --- Helper: Wipe the ephemeral parts of a smoke-test install directory ---
+// Keeps the installed server runtime (loader jars/libraries) so re-runs don't
+// re-download them, but removes the world/mods/logs so every run creates a
+// genuinely fresh world (the world dir name must match level-name below).
+ext.prodResetSmokeTestState = { File installDir ->
+    [PROD_SMOKE_TEST_LEVEL_NAME, 'mods', 'logs', 'crash-reports'].each { name ->
+        def d = new File(installDir, name)
+        if (d.exists()) d.deleteDir()
+    }
+    ['eula.txt', 'server.properties'].each { name ->
+        def f = new File(installDir, name)
+        if (f.exists()) f.delete()
+    }
+}
+
+// --- Helper: Write minimal eula.txt / server.properties for a fast smoke test ---
+ext.prodWriteServerConfig = { File installDir ->
+    new File(installDir, 'eula.txt').text = "eula=true\n"
+    new File(installDir, 'server.properties').text = """\
+level-name=${PROD_SMOKE_TEST_LEVEL_NAME}
+view-distance=2
+simulation-distance=2
+online-mode=false
+gamemode=survival
+spawn-protection=0
+enable-command-block=false
+"""
+}
+
+// --- Helper: Run a headless dedicated server and wait for world-creation to finish ---
+// Streams the process's stdout/stderr to logFile while watching for a vanilla
+// "Done (...)!" readiness line. Sends "stop" and waits briefly once ready;
+// throws (failing the task) on timeout or an early exit without that line.
+ext.prodRunHeadlessServerSmokeTest = { List<String> command, File workingDir, File logFile, int timeoutSeconds ->
+    logFile.parentFile.mkdirs()
+    // ProcessBuilder(List) casts to String[] internally; GStrings (from "@${...}"
+    // interpolation in callers) fail that cast with an ArrayStoreException, so
+    // coerce every element to a real String here regardless of caller.
+    def pb = new ProcessBuilder(command.collect { it.toString() })
+    pb.directory(workingDir)
+    pb.redirectErrorStream(true)
+    def process = pb.start()
+
+    def ready = new java.util.concurrent.atomic.AtomicBoolean(false)
+    def logWriter = logFile.newPrintWriter()
+    def readerThread = Thread.start {
+        process.inputStream.eachLine { line ->
+            logWriter.println(line)
+            logWriter.flush()
+            if (line.contains('Done (')) {
+                ready.set(true)
+            }
+        }
+    }
+
+    def timedOut = false
+    try {
+        def deadline = System.currentTimeMillis() + (timeoutSeconds * 1000L)
+        while (!ready.get() && process.isAlive() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(500)
+        }
+        timedOut = !ready.get() && process.isAlive()
+
+        if (ready.get()) {
+            try {
+                process.outputStream.write("stop\n".getBytes())
+                process.outputStream.flush()
+            } catch (IOException ignored) {
+                // Process may have already started shutting down.
+            }
+        }
+    } finally {
+        // Always reached, including on Thread.sleep() interruption (e.g. Ctrl+C /
+        // daemon cancellation), so the child server JVM never gets orphaned.
+        process.waitForOrKill(15000)
+        readerThread.join(5000)
+        logWriter.close()
+    }
+
+    if (!ready.get()) {
+        def reason = timedOut
+            ? "timed out after ${timeoutSeconds}s waiting for the server to finish loading"
+            : "process exited early (exit code ${process.exitValue()}) before finishing world creation"
+        throw new GradleException("prodSmokeTest failed: ${reason}. See log: ${logFile}")
+    }
+}
+
 // ============================================================
 // Task: downloadMinecraft
 // Downloads vanilla client JAR, libraries, and assets.
@@ -591,6 +700,106 @@ if (project.name == 'fabric') {
             logger.lifecycle("  Classpath entries: ${cp.size()}")
         }
     }
+
+    // --- Task: installFabricServerSmoke ---
+    // Installs a real Fabric dedicated-server runtime (fabric-server-launch.jar +
+    // vanilla server.jar) into the smoke-test directory. Idempotent: skipped once
+    // fabric-server-launch.jar already exists, so re-runs only redo the world/mods.
+    tasks.register('installFabricServerSmoke') {
+        group = taskGroupName
+        description = "Install Fabric dedicated-server runtime for prodSmokeTest (${mcVersion})"
+        // No dependsOn downloadMinecraft: the Fabric installer's own
+        // -downloadMinecraft flag fetches the server-side jar it needs;
+        // this task never reads prodCacheDir's client jar/libraries/assets.
+
+        doLast {
+            def installDir = prodSmokeTestDir('fabric')
+            def launchJar = new File(installDir, 'fabric-server-launch.jar')
+            if (launchJar.exists()) {
+                logger.lifecycle("  Fabric server runtime already installed: ${mcVersion}")
+                return
+            }
+            installDir.mkdirs()
+
+            def loaderVersion = project.findProperty('fabric_loader_version')
+            def installerVersion = project.findProperty('fabric_installer_version') ?: '1.0.1'
+            def installerJar = file("${prodCacheDir}/installers/fabric-installer-${installerVersion}.jar")
+            prodDownloadFile(
+                "https://maven.fabricmc.net/net/fabricmc/fabric-installer/${installerVersion}/fabric-installer-${installerVersion}.jar",
+                installerJar
+            )
+
+            logger.lifecycle("=== Installing Fabric dedicated-server runtime (${mcVersion}) ===")
+            def launcher = javaToolchains.launcherFor {
+                languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
+            }.get()
+            def process = new ProcessBuilder(
+                launcher.executablePath.asFile.absolutePath,
+                '-jar', installerJar.absolutePath,
+                'server',
+                '-mcversion', mcVersion,
+                '-loader', loaderVersion,
+                '-dir', installDir.absolutePath,
+                '-downloadMinecraft'
+            ).inheritIO().start()
+            def exitCode = process.waitFor()
+            if (exitCode != 0) {
+                throw new GradleException("Fabric server installer failed with exit code ${exitCode}")
+            }
+            if (!launchJar.exists()) {
+                throw new GradleException("Fabric server installer did not create fabric-server-launch.jar in: ${installDir}")
+            }
+            logger.lifecycle("  Fabric server runtime installed successfully")
+        }
+    }
+
+    // --- Task: prodSmokeTest ---
+    // Headless dedicated-server smoke test: installs the built mod into a real
+    // Fabric server runtime and confirms a fresh world can be created without
+    // crashing. No display required. Recommended after Mixin config changes or
+    // when adding a new Minecraft version (see CLAUDE.md).
+    tasks.register('prodSmokeTest') {
+        group = taskGroupName
+        description = "Headless dedicated-server world-creation smoke test (Fabric ${mcVersion})"
+        def modJarTaskName = tasks.findByName('transformShadowJar') ? 'transformShadowJar'
+            : tasks.findByName('remapJar') ? 'remapJar'
+            : tasks.findByName('shadowJar') ? 'shadowJar' : 'jar'
+        dependsOn 'installFabricServerSmoke', modJarTaskName
+
+        doLast {
+            def installDir = prodSmokeTestDir('fabric')
+            prodResetSmokeTestState(installDir)
+
+            def modsDir = new File(installDir, 'mods')
+            modsDir.mkdirs()
+            def modJar = tasks.named(modJarTaskName).get().archiveFile.get().asFile
+            ant.copy(file: modJar, todir: modsDir)
+            logger.lifecycle("  Mod: ${modJar.name}")
+            configurations.prodMods.files.each { f ->
+                ant.copy(file: f, todir: modsDir)
+                logger.lifecycle("  Dep: ${f.name}")
+            }
+
+            prodWriteServerConfig(installDir)
+
+            def launcher = javaToolchains.launcherFor {
+                languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
+            }.get()
+            def launchJar = new File(installDir, 'fabric-server-launch.jar')
+            def command = [
+                launcher.executablePath.asFile.absolutePath,
+                '-Xmx2G', '-Xms512M',
+                '-jar', launchJar.absolutePath,
+                'nogui'
+            ]
+            def logFile = file("${installDir}/smoke-test.log")
+
+            logger.lifecycle("=== prodSmokeTest (Fabric ${mcVersion}) ===")
+            logger.lifecycle("  Install dir: ${installDir}")
+            prodRunHeadlessServerSmokeTest(command, installDir, logFile, 300)
+            logger.lifecycle("  World created successfully. Log: ${logFile}")
+        }
+    }
 }
 
 // ============================================================
@@ -772,6 +981,113 @@ if (project.name == 'neoforge') {
             logger.lifecycle("  Game dir: ${instanceDir}")
             logger.lifecycle("  Main class: ${mergedJson.mainClass}")
             logger.lifecycle("  Classpath entries: ${cp.size()}")
+        }
+    }
+
+    // --- Task: installNeoForgeServerSmoke ---
+    // Installs a real NeoForge dedicated-server runtime (via the installer's
+    // --installServer mode) into the smoke-test directory. Idempotent: skipped
+    // once run.sh already exists, so re-runs only redo the world/mods.
+    tasks.register('installNeoForgeServerSmoke') {
+        group = taskGroupName
+        description = "Install NeoForge dedicated-server runtime for prodSmokeTest (${mcVersion})"
+        // No dependsOn downloadMinecraft: --installServer fetches the
+        // server-side files it needs itself; this task never reads
+        // prodCacheDir's client jar/libraries/assets.
+
+        doLast {
+            def installDir = prodSmokeTestDir('neoforge')
+            def runScript = new File(installDir, 'run.sh')
+            if (runScript.exists()) {
+                logger.lifecycle("  NeoForge server runtime already installed: ${mcVersion}")
+                return
+            }
+            installDir.mkdirs()
+
+            def installerJar = file("${prodCacheDir}/installers/neoforge-${neoforgeVersion}-installer.jar")
+            prodDownloadFile(
+                "https://maven.neoforged.net/releases/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-installer.jar",
+                installerJar
+            )
+
+            logger.lifecycle("=== Installing NeoForge dedicated-server runtime (${mcVersion}) ===")
+            def launcher = javaToolchains.launcherFor {
+                languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
+            }.get()
+            def process = new ProcessBuilder(
+                launcher.executablePath.asFile.absolutePath,
+                '-jar', installerJar.absolutePath,
+                '--installServer', installDir.absolutePath
+            ).inheritIO().start()
+            def exitCode = process.waitFor()
+            if (exitCode != 0) {
+                throw new GradleException("NeoForge server installer failed with exit code ${exitCode}")
+            }
+            if (!runScript.exists()) {
+                throw new GradleException("NeoForge server installer did not create run.sh in: ${installDir}")
+            }
+            logger.lifecycle("  NeoForge server runtime installed successfully")
+        }
+    }
+
+    // --- Task: prodSmokeTest ---
+    // Headless dedicated-server smoke test: installs the built mod into a real
+    // NeoForge server runtime and confirms a fresh world can be created without
+    // crashing. No display required. Recommended after Mixin config changes or
+    // when adding a new Minecraft version (see CLAUDE.md).
+    tasks.register('prodSmokeTest') {
+        group = taskGroupName
+        description = "Headless dedicated-server world-creation smoke test (NeoForge ${mcVersion})"
+        def modJarTaskName = tasks.findByName('transformShadowJar') ? 'transformShadowJar'
+            : tasks.findByName('remapJar') ? 'remapJar'
+            : tasks.findByName('shadowJar') ? 'shadowJar' : 'jar'
+        dependsOn 'installNeoForgeServerSmoke', modJarTaskName
+
+        doLast {
+            def installDir = prodSmokeTestDir('neoforge')
+            prodResetSmokeTestState(installDir)
+
+            def modsDir = new File(installDir, 'mods')
+            modsDir.mkdirs()
+            def modJar = tasks.named(modJarTaskName).get().archiveFile.get().asFile
+            ant.copy(file: modJar, todir: modsDir)
+            logger.lifecycle("  Mod: ${modJar.name}")
+            configurations.prodMods.files.each { f ->
+                ant.copy(file: f, todir: modsDir)
+                logger.lifecycle("  Dep: ${f.name}")
+            }
+
+            prodWriteServerConfig(installDir)
+
+            def launcher = javaToolchains.launcherFor {
+                languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
+            }.get()
+
+            // The --installServer output provides @-argfiles (user_jvm_args.txt +
+            // libraries/.../<neoforgeVersionId>/*unix_args.txt) with paths already
+            // resolved relative to installDir; find the unix one for this OS.
+            def neoforgeLibDir = new File(installDir, "libraries/net/neoforged/neoforge/${neoforgeVersion}")
+            def unixArgsFile = neoforgeLibDir.exists()
+                ? neoforgeLibDir.listFiles({ f -> f.name.endsWith('unix_args.txt') } as FileFilter)?.find { true }
+                : null
+            if (unixArgsFile == null) {
+                throw new GradleException("Could not locate NeoForge server unix_args.txt under ${neoforgeLibDir} " +
+                    "(installer output layout may differ from what prodSmokeTest expects; inspect ${installDir} manually)")
+            }
+            def userJvmArgsFile = new File(installDir, 'user_jvm_args.txt')
+            def command = [
+                launcher.executablePath.asFile.absolutePath,
+                '-Xmx2G', '-Xms512M',
+                "@${userJvmArgsFile.absolutePath}",
+                "@${unixArgsFile.absolutePath}",
+                'nogui'
+            ]
+            def logFile = file("${installDir}/smoke-test.log")
+
+            logger.lifecycle("=== prodSmokeTest (NeoForge ${mcVersion}) ===")
+            logger.lifecycle("  Install dir: ${installDir}")
+            prodRunHeadlessServerSmokeTest(command, installDir, logFile, 300)
+            logger.lifecycle("  World created successfully. Log: ${logFile}")
         }
     }
 }

@@ -240,6 +240,8 @@ API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TO
 - `installNeoForge` - Install NeoForge via installer (NeoForge only)
 - `setupProdMods` - Copy built mod and dependencies to instance
 - `runProd` - Launch Minecraft in production-like environment
+- `installFabricServerSmoke` / `installNeoForgeServerSmoke` - Install a headless dedicated-server runtime for `prodSmokeTest` (Fabric/NeoForge only; not supported for Forge)
+- `prodSmokeTest` - Headless world-creation smoke test: boots a real dedicated server with the built mod and fails if it doesn't reach "Done (...)!" within 5 minutes. No display required. Uses `build/prod-smoke/<loader>-<version>/`, separate from `prod_base_dir`, so it never touches a manually-verified `runProd` instance
 
 JARs are uploaded in ascending version order (newest last) so the latest version
 becomes the platform's default/main file. A SemVer pre-release suffix on the mod
