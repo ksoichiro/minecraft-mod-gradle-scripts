@@ -152,6 +152,15 @@ fabric_only_mc_versions=1.20.1
 # Base directory for production run files (default: ${rootDir}/run-prod)
 prod_base_dir=${rootDir}/run-prod
 
+# Make prodSmokeTest also fail on WARN/ERROR/FATAL server log lines that no
+# ignore pattern matches (default: false). Noise caused by the smoke-test
+# harness itself (offline mode banner, etc.) is always ignored.
+prod_smoke_log_check=true
+
+# Project ignore list for prod_smoke_log_check: one Java regex per line,
+# matched anywhere in the log line. '#' comments and blank lines are skipped.
+prod_smoke_log_ignore_file=${rootDir}/prod-smoke-log-ignore.txt
+
 # Shared resource directories for validation (auto-detected if not set)
 shared_resource_dirs=common/shared/src/main/resources,common/shared-1.21.1+/src/main/resources
 
@@ -241,7 +250,7 @@ API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TO
 - `setupProdMods` - Copy built mod and dependencies to instance
 - `runProd` - Launch Minecraft in production-like environment
 - `installFabricServerSmoke` / `installNeoForgeServerSmoke` - Install a headless dedicated-server runtime for `prodSmokeTest` (Fabric/NeoForge only; not supported for Forge)
-- `prodSmokeTest` - Headless world-creation smoke test: boots a real dedicated server with the built mod and fails if it doesn't reach "Done (...)!" within 5 minutes. No display required. Uses `build/prod-smoke/<loader>-<version>/`, separate from `prod_base_dir`, so it never touches a manually-verified `runProd` instance
+- `prodSmokeTest` - Headless world-creation smoke test: boots a real dedicated server with the built mod and fails if it doesn't reach "Done (...)!" within 5 minutes. No display required. Uses `build/prod-smoke/<loader>-<version>/`, separate from `prod_base_dir`, so it never touches a manually-verified `runProd` instance. With `prod_smoke_log_check=true` it also fails on unexpected WARN/ERROR/FATAL lines in the server log
 
 JARs are uploaded in ascending version order (newest last) so the latest version
 becomes the platform's default/main file. A SemVer pre-release suffix on the mod

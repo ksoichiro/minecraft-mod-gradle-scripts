@@ -14,6 +14,11 @@
 // Optional project properties:
 //   prod_base_dir        - Base directory for production run files (default: ${rootDir}/run-prod)
 //   release_project_name - Project display name for task groups (defaults to project.name)
+//   prod_smoke_log_check - When true, prodSmokeTest also fails if the server log contains
+//                          a WARN/ERROR/FATAL line not matched by an ignore pattern (default: false)
+//   prod_smoke_log_ignore_file - Project ignore list for prod_smoke_log_check: one Java regex
+//                          per line (matched anywhere in the line), '#' comments and blank
+//                          lines skipped (default: ${rootDir}/prod-smoke-log-ignore.txt)
 //
 // prodSmokeTest uses a build-relative directory (build/prod-smoke/<loader>-<version>),
 // separate from prod_base_dir, so it never touches manually-verified runProd state.
@@ -457,6 +462,57 @@ ext.prodRunHeadlessServerSmokeTest = { List<String> command, File workingDir, Fi
     }
 }
 
+// --- Constant: WARN/ERROR lines caused by the smoke-test harness itself ---
+// Always ignored by prodCheckSmokeTestLog, so projects only list their own entries.
+ext.PROD_SMOKE_DEFAULT_LOG_IGNORES = [
+    // prodWriteServerConfig sets online-mode=false
+    /\*\*\*\* SERVER IS RUNNING IN OFFLINE\/INSECURE MODE!/,
+    /The server will make no attempt to authenticate usernames/,
+    /While this makes the game possible to play without internet access/,
+    /To change this, set "online-mode" to "true"/,
+    // LAN broadcast fails on hosts without a usable network route
+    /LanServerPinger: No route to host/,
+    // NeoForge installer layout loads vanilla assets through a union: URL
+    /VanillaPackResourcesBuilder.*uses unexpected schema/,
+    // Fresh install directory writes its default loader config on first run
+    /FMLConfig.*is not correct\. Correcting/,
+    // Vanilla logs this for every modded entity type on older versions
+    /No data fixer registered for /,
+]
+
+// --- Helper: Fail on unexpected WARN/ERROR/FATAL lines in a smoke-test log ---
+// Catches problems that don't stop world creation but are only reported in the
+// log (e.g. NeoForge's biome mob category mismatch warning).
+ext.prodCheckSmokeTestLog = { File logFile ->
+    def ignoreFile = file(project.findProperty('prod_smoke_log_ignore_file') ?: "${rootDir}/prod-smoke-log-ignore.txt")
+    def patterns = PROD_SMOKE_DEFAULT_LOG_IGNORES.collect { java.util.regex.Pattern.compile(it) }
+    if (ignoreFile.exists()) {
+        ignoreFile.readLines().eachWithIndex { raw, i ->
+            def entry = raw.trim()
+            if (entry.isEmpty() || entry.startsWith('#')) return
+            try {
+                patterns << java.util.regex.Pattern.compile(entry)
+            } catch (java.util.regex.PatternSyntaxException e) {
+                throw new GradleException("Invalid regex at ${ignoreFile}:${i + 1}: ${e.description}")
+            }
+        }
+    }
+
+    def levelPattern = ~/\[[^\]]*\/(WARN|ERROR|FATAL)\]/
+    def unexpected = logFile.readLines()
+        .collect { it.replaceAll(/\u001B\[[0-9;]*m/, '') }
+        .findAll { line -> line.find(levelPattern) && !patterns.any { it.matcher(line).find() } }
+    if (unexpected.isEmpty()) return
+
+    def maxShown = 50
+    unexpected.take(maxShown).each { logger.error("  ${it}") }
+    if (unexpected.size() > maxShown) {
+        logger.error("  ... and ${unexpected.size() - maxShown} more")
+    }
+    throw new GradleException("prodSmokeTest failed: ${unexpected.size()} unexpected WARN/ERROR log line(s). " +
+        "Fix them or add an ignore pattern to ${ignoreFile}. See log: ${logFile}")
+}
+
 // ============================================================
 // Task: downloadMinecraft
 // Downloads vanilla client JAR, libraries, and assets.
@@ -798,6 +854,10 @@ if (project.name == 'fabric') {
             logger.lifecycle("  Install dir: ${installDir}")
             prodRunHeadlessServerSmokeTest(command, installDir, logFile, 300)
             logger.lifecycle("  World created successfully. Log: ${logFile}")
+            if (project.findProperty('prod_smoke_log_check')?.toString()?.toBoolean()) {
+                prodCheckSmokeTestLog(logFile)
+                logger.lifecycle("  No unexpected WARN/ERROR log lines.")
+            }
         }
     }
 }
@@ -1088,6 +1148,10 @@ if (project.name == 'neoforge') {
             logger.lifecycle("  Install dir: ${installDir}")
             prodRunHeadlessServerSmokeTest(command, installDir, logFile, 300)
             logger.lifecycle("  World created successfully. Log: ${logFile}")
+            if (project.findProperty('prod_smoke_log_check')?.toString()?.toBoolean()) {
+                prodCheckSmokeTestLog(logFile)
+                logger.lifecycle("  No unexpected WARN/ERROR log lines.")
+            }
         }
     }
 }
