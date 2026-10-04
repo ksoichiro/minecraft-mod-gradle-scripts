@@ -149,6 +149,12 @@ hotfix_mc_versions=1.21.3=1.21.2
 # enabled_platforms (see below).
 fabric_only_mc_versions=1.20.1
 
+# Tasks disabled in the per-version builds of buildAll/build<VERSION>
+# (comma-separated task names; names missing in a version are ignored).
+# Useful for a GameTest run that Fabric API's configureTests wires into
+# `check`, or sources jars that are never released.
+build_skipped_tasks=runGameTest,sourcesJar,remapSourcesJar
+
 # Base directory for production run files (default: ${rootDir}/run-prod)
 prod_base_dir=${rootDir}/run-prod
 
@@ -227,7 +233,7 @@ API tokens are read from environment variables: `MODRINTH_TOKEN`, `CURSEFORGE_TO
 ### multi-version-tasks.gradle
 
 - `clean<VERSION>` - Clean build outputs for a specific MC version
-- `cleanAll` - Clean all release versions
+- `cleanAll` - Clean all release versions (deletes the `build/` directories of `common/<VERSION>` and `<platform>/<VERSION>` directly, without starting Gradle per version)
 - `build<VERSION>` - Build for a specific MC version
 - `buildAll` - Parallel build for all release versions
 - `runClient<Loader><VERSION>` - Run client for a specific loader and version

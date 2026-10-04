@@ -9,6 +9,7 @@
 // Optional project properties:
 //   hotfix_mc_versions     - Comma-separated "hotfix=base" pairs (e.g., "1.21.3=1.21.2")
 //   fabric_only_mc_versions - Comma-separated versions that only support Fabric (no NeoForge)
+//   build_skipped_tasks    - Comma-separated task names disabled in buildAll/build<version>
 
 // --- Configuration ---
 def supportedVersions = project.property('supported_mc_versions').toString().split(',').collect { it.trim() }
@@ -94,20 +95,19 @@ supportedVersions.each { version ->
  *
  * Note: Hotfix versions are excluded because they share modules with their base version.
  * Cleaning the base version also cleans the modules used by hotfix versions.
+ *
+ * The build/ directories of the version-specific modules (common/<version>,
+ * <platform>/<version>) are deleted directly instead of running `clean` in one
+ * Gradle subprocess per version: each subprocess pays the full Loom
+ * configuration cost just to delete a directory. Subprojects outside this
+ * layout (e.g. a shared "-base" module with a custom build directory) are not
+ * covered here, but buildAll still runs `clean` in every per-version build.
  */
 tasks.register('cleanAll') {
     group = taskGroupName
     description = "Clean build outputs for all supported Minecraft versions (${releaseVersions.join(', ')})"
 
     doLast {
-        releaseVersions.each { version ->
-            logger.lifecycle(">>> Cleaning for Minecraft ${version}...")
-
-            runGradle(['clean', "-Ptarget_mc_version=${version}"])
-        }
-
-        // Clean IDE-generated bin/ directories that can interfere with builds/tests
-        // (e.g., IntelliJ/Eclipse output directories with unprocessed placeholders)
         def subprojects = []
         releaseVersions.each { version ->
             subprojects.add("common/${version}")
@@ -115,6 +115,17 @@ tasks.register('cleanAll') {
                 subprojects.add("${platform}/${version}")
             }
         }
+
+        subprojects.each { subdir ->
+            def buildDir = file("${subdir}/build")
+            if (buildDir.exists()) {
+                logger.lifecycle(">>> Deleting build output: ${buildDir}")
+                delete buildDir
+            }
+        }
+
+        // Clean IDE-generated bin/ directories that can interfere with builds/tests
+        // (e.g., IntelliJ/Eclipse output directories with unprocessed placeholders)
         def deletedCount = 0
         subprojects.each { subdir ->
             def binDir = file("${subdir}/bin")
@@ -161,6 +172,20 @@ tasks.register('cleanAll') {
 // Build Tasks
 // ============================================================
 
+// Tasks disabled in the per-version builds started by buildAll/build<version>
+// (optional 'build_skipped_tasks' property, comma-separated task names), e.g.
+// a GameTest run that Fabric API's configureTests wires into `check`, or
+// sources jars that are never released. Disabled via a property instead of
+// `-x`, because `-x` fails when a task does not exist in every version (e.g.
+// remapSourcesJar is absent in no-remap Loom builds).
+def buildSkippedTasks = (project.findProperty('build_skipped_tasks') ?: '').toString()
+        .split(',').collect { it.trim() }.findAll { it }
+if (project.findProperty('multi_version_build') == 'true' && !buildSkippedTasks.isEmpty()) {
+    subprojects { sp ->
+        sp.tasks.matching { it.name in buildSkippedTasks }.configureEach { it.enabled = false }
+    }
+}
+
 // Register build task for each supported version
 supportedVersions.each { version ->
     def versionSuffix = version.replace('.', '_')
@@ -178,7 +203,8 @@ supportedVersions.each { version ->
         }
 
         doLast {
-            runGradle(['clean', 'build', "-Ptarget_mc_version=${version}", '-x', 'test'])
+            runGradle(['clean', 'build', "-Ptarget_mc_version=${version}", '-x', 'test',
+                       '-Pmulti_version_build=true'])
         }
     }
 }
@@ -235,6 +261,7 @@ tasks.register('buildAll') {
                     def pb = new ProcessBuilder(
                         gradlew, 'clean', 'build',
                         "-Ptarget_mc_version=${version}", '-x', 'test',
+                        '-Pmulti_version_build=true',
                         '--project-cache-dir', ".gradle/build-${version}",
                         '--no-parallel'
                     )
