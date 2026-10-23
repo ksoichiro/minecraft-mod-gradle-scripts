@@ -19,6 +19,9 @@
 //   prod_smoke_log_ignore_file - Project ignore list for prod_smoke_log_check: one Java regex
 //                          per line (matched anywhere in the line), '#' comments and blank
 //                          lines skipped (default: ${rootDir}/prod-smoke-log-ignore.txt)
+//   prod_client_command_out - When set to a file path, Fabric/NeoForge runProd writes the
+//                          resolved client launch command there as JSON and stops without
+//                          launching, so external tooling can start the client itself
 //
 // prodSmokeTest uses a build-relative directory (build/prod-smoke/<loader>-<version>),
 // separate from prod_base_dir, so it never touches manually-verified runProd state.
@@ -513,6 +516,31 @@ ext.prodCheckSmokeTestLog = { File logFile ->
         "Fix them or add an ignore pattern to ${ignoreFile}. See log: ${logFile}")
 }
 
+// --- Helper: Export runProd's resolved client command instead of launching ---
+// Called at the end of runProd's doFirst. When prod_client_command_out is set,
+// writes {java, jvmArgs, classpath, mainClass, args, workingDir} as JSON and
+// stops the task (successfully) before JavaExec launches the client. Lets
+// external drivers start the production client with extra arguments (e.g.
+// --quickPlayMultiplayer) and their own lifecycle control.
+ext.prodExportClientCommandIfRequested = { JavaExec task ->
+    def out = project.findProperty('prod_client_command_out')
+    if (!out) return
+    def outFile = file(out.toString())
+    outFile.parentFile.mkdirs()
+    def java = task.javaLauncher.getOrNull()?.executablePath?.asFile?.absolutePath ?: task.executable
+    def command = [
+        java      : java.toString(),
+        jvmArgs   : task.allJvmArgs.collect { it.toString() },
+        classpath : task.classpath.files.collect { it.absolutePath },
+        mainClass : task.mainClass.get(),
+        args      : task.args.collect { it.toString() },
+        workingDir: task.workingDir.absolutePath,
+    ]
+    outFile.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(command)) + "\n"
+    logger.lifecycle("  Client command written to ${outFile} (not launching)")
+    throw new StopExecutionException()
+}
+
 // ============================================================
 // Task: downloadMinecraft
 // Downloads vanilla client JAR, libraries, and assets.
@@ -754,6 +782,8 @@ if (project.name == 'fabric') {
             logger.lifecycle("=== runProd (Fabric ${mcVersion}) ===")
             logger.lifecycle("  Game dir: ${instanceDir}")
             logger.lifecycle("  Classpath entries: ${cp.size()}")
+
+            prodExportClientCommandIfRequested(it)
         }
     }
 
@@ -1041,6 +1071,8 @@ if (project.name == 'neoforge') {
             logger.lifecycle("  Game dir: ${instanceDir}")
             logger.lifecycle("  Main class: ${mergedJson.mainClass}")
             logger.lifecycle("  Classpath entries: ${cp.size()}")
+
+            prodExportClientCommandIfRequested(it)
         }
     }
 
