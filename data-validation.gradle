@@ -30,8 +30,15 @@ tasks.register('validateData') {
     group = 'verification'
     description = 'Validates data-pack cross-references (tag entries, recipe references, client items coverage)'
 
+    // Read at configuration time: Task.project is deprecated inside doLast.
+    def archivesName = project.property('archives_name').toString()
+    def props = ['item_id_file', 'block_id_file', 'entity_id_file',
+                 'data_validation_excluded_ids', 'client_items_roots',
+                 'client_items_excluded_ids']
+            .collectEntries { [it, project.findProperty(it)?.toString()] }
+            .findAll { it.value != null }
+
     doLast {
-        def archivesName = project.property('archives_name').toString()
         def jsonSlurper = new JsonSlurper()
         def errors = []
 
@@ -47,8 +54,8 @@ tasks.register('validateData') {
 
         def readIds = { String propName ->
             def ids = [] as Set
-            if (project.hasProperty(propName)) {
-                ids.addAll(extractDataEnumValues(file("${rootProject.projectDir}/${project.property(propName)}")))
+            if (props.containsKey(propName)) {
+                ids.addAll(extractDataEnumValues(file("${rootProject.projectDir}/${props[propName]}")))
             }
             ids
         }
@@ -58,8 +65,8 @@ tasks.register('validateData') {
         def itemAndBlockIds = (itemIds + blockIds) as Set
 
         def excludedIds = [] as Set
-        if (project.hasProperty('data_validation_excluded_ids')) {
-            excludedIds.addAll(project.property('data_validation_excluded_ids').toString().split(',').collect { it.trim() })
+        if (props.containsKey('data_validation_excluded_ids')) {
+            excludedIds.addAll(props['data_validation_excluded_ids'].toString().split(',').collect { it.trim() })
         }
 
         def relPath = { File f -> rootProject.projectDir.toPath().relativize(f.toPath()).toString() }
@@ -176,14 +183,14 @@ tasks.register('validateData') {
         logger.lifecycle("  Checked ${recipeRefsChecked} recipe references")
 
         // --- Check C: client items JSON coverage (1.21.4+) -------------------
-        if (project.hasProperty('client_items_roots')) {
+        if (props.containsKey('client_items_roots')) {
             logger.lifecycle("Checking client items JSON coverage...")
-            def clientRoots = project.property('client_items_roots').toString().split(',').collect {
+            def clientRoots = props['client_items_roots'].toString().split(',').collect {
                 file("${rootProject.projectDir}/${it.trim()}")
             }
             def clientExcluded = [] as Set
-            if (project.hasProperty('client_items_excluded_ids')) {
-                clientExcluded.addAll(project.property('client_items_excluded_ids').toString().split(',').collect { it.trim() })
+            if (props.containsKey('client_items_excluded_ids')) {
+                clientExcluded.addAll(props['client_items_excluded_ids'].toString().split(',').collect { it.trim() })
             }
             // Item-form IDs: registered items plus every item model basename.
             // The model union pulls in BlockItems; item-less blocks (wall

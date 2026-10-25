@@ -20,12 +20,15 @@ tasks.register('validateResources') {
     group = 'verification'
     description = 'Validates JSON syntax and resource cross-references in assets'
 
-    doLast {
-        def archivesName = project.property('archives_name').toString()
+    // Read at configuration time: Task.project is deprecated inside doLast.
+    def archivesName = project.property('archives_name').toString()
+    def props = ['shared_resource_dirs'].collectEntries { [it, project.findProperty(it)?.toString()] }
+            .findAll { it.value != null }
 
+    doLast {
         def sharedDirs = []
-        if (project.hasProperty('shared_resource_dirs')) {
-            project.property('shared_resource_dirs').toString().split(',').each {
+        if (props.containsKey('shared_resource_dirs')) {
+            props['shared_resource_dirs'].toString().split(',').each {
                 sharedDirs.add(file("${rootProject.projectDir}/${it.trim()}"))
             }
         } else {
@@ -144,28 +147,33 @@ tasks.register('validateTranslations') {
     group = 'verification'
     description = 'Validates that translation keys exist across all Minecraft versions'
 
-    doLast {
-        def archivesName = project.property('archives_name').toString()
+    // Read at configuration time: Task.project is deprecated inside doLast.
+    def archivesName = project.property('archives_name').toString()
+    def props = ['translation_versions', 'supported_mc_versions', 'translation_hotfix_versions',
+                 'hotfix_mc_versions', 'entity_id_file', 'item_id_file', 'excluded_entities']
+            .collectEntries { [it, project.findProperty(it)?.toString()] }
+            .findAll { it.value != null }
 
+    doLast {
         def versions = []
-        if (project.hasProperty('translation_versions')) {
-            versions = project.property('translation_versions').toString().split(',').collect { it.trim() }
+        if (props.containsKey('translation_versions')) {
+            versions = props['translation_versions'].toString().split(',').collect { it.trim() }
         } else {
             // Default: use supported_mc_versions if available
-            if (project.hasProperty('supported_mc_versions')) {
-                versions = project.property('supported_mc_versions').toString().split(',').collect { it.trim() }
+            if (props.containsKey('supported_mc_versions')) {
+                versions = props['supported_mc_versions'].toString().split(',').collect { it.trim() }
             }
         }
 
         // Map hotfix versions to their base module version
         def moduleVersionMap = [:]
-        if (project.hasProperty('translation_hotfix_versions')) {
-            project.property('translation_hotfix_versions').toString().split(',').each {
+        if (props.containsKey('translation_hotfix_versions')) {
+            props['translation_hotfix_versions'].toString().split(',').each {
                 def parts = it.trim().split('=')
                 moduleVersionMap[parts[0]] = parts[1]
             }
-        } else if (project.hasProperty('hotfix_mc_versions')) {
-            project.property('hotfix_mc_versions').toString().split(',').each {
+        } else if (props.containsKey('hotfix_mc_versions')) {
+            props['hotfix_mc_versions'].toString().split(',').each {
                 def parts = it.trim().split('=')
                 moduleVersionMap[parts[0]] = parts[1]
             }
@@ -176,22 +184,22 @@ tasks.register('validateTranslations') {
 
         // Parse entity ID file
         def entityIds = []
-        if (project.hasProperty('entity_id_file')) {
-            def entityIdFile = file("${rootProject.projectDir}/${project.property('entity_id_file')}")
+        if (props.containsKey('entity_id_file')) {
+            def entityIdFile = file("${rootProject.projectDir}/${props['entity_id_file']}")
             entityIds = extractEnumValues(entityIdFile)
         }
 
         // Parse item ID file
         def itemIds = []
-        if (project.hasProperty('item_id_file')) {
-            def itemIdFile = file("${rootProject.projectDir}/${project.property('item_id_file')}")
+        if (props.containsKey('item_id_file')) {
+            def itemIdFile = file("${rootProject.projectDir}/${props['item_id_file']}")
             itemIds = extractEnumValues(itemIdFile)
         }
 
         // Technical entities that don't need translations
         def excludedEntities = []
-        if (project.hasProperty('excluded_entities')) {
-            excludedEntities = project.property('excluded_entities').toString().split(',').collect { it.trim() }
+        if (props.containsKey('excluded_entities')) {
+            excludedEntities = props['excluded_entities'].toString().split(',').collect { it.trim() }
         }
 
         logger.lifecycle("Validating translations across ${versions.size()} versions...")
