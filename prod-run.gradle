@@ -918,9 +918,25 @@ if (project.name == 'neoforge') {
         doLast {
             def versionJsonFile = new File(neoforgeInstallDir,
                 "versions/${neoforgeVersionId}/${neoforgeVersionId}.json")
-            if (versionJsonFile.exists()) {
+            // The version JSON is written early by the installer, so it alone
+            // cannot prove completion. The patched client jar is produced by a
+            // late processor; if it is missing the install was interrupted and
+            // every later launch fails with "minecraft ... [MISSING]".
+            def patchedClientJar = new File(neoforgeInstallDir,
+                "libraries/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-client.jar")
+            if (versionJsonFile.exists() && patchedClientJar.exists()) {
                 logger.lifecycle("  NeoForge already installed: ${neoforgeVersionId}")
                 return
+            }
+            if (neoforgeInstallDir.exists() && neoforgeInstallDir.list().length > 0) {
+                // Move aside instead of deleting so the partial state can be inspected.
+                def stamp = new Date().format('yyyyMMdd-HHmmss')
+                def brokenDir = new File(neoforgeInstallDir.parentFile, "${neoforgeInstallDir.name}.broken-${stamp}")
+                logger.warn("  Incomplete NeoForge install detected (missing version JSON or patched client jar). " +
+                    "Moving ${neoforgeInstallDir.name} to ${brokenDir.name} and reinstalling.")
+                if (!neoforgeInstallDir.renameTo(brokenDir)) {
+                    throw new GradleException("Could not move incomplete NeoForge install to: ${brokenDir}")
+                }
             }
 
             logger.lifecycle("=== Installing NeoForge ${neoforgeVersion} ===")
@@ -962,18 +978,36 @@ if (project.name == 'neoforge') {
             def launcher = javaToolchains.launcherFor {
                 languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
             }.get()
+            // Keep the installer output on disk (next to the installer jar, since
+            // the install dir is moved aside when incomplete) so a stalled or
+            // failed install can be diagnosed afterwards.
+            def installLog = file("${prodCacheDir}/installers/neoforge-${neoforgeVersion}-install-${mcVersion}.log")
             def process = new ProcessBuilder(
                 launcher.executablePath.asFile.absolutePath,
                 '-jar', installerJar.absolutePath,
                 '--installClient', neoforgeInstallDir.absolutePath
-            ).inheritIO().start()
+            ).redirectErrorStream(true).start()
+            installLog.withOutputStream { logOut ->
+                process.inputStream.withStream { input ->
+                    byte[] buf = new byte[8192]
+                    int n
+                    while ((n = input.read(buf)) != -1) {
+                        System.out.write(buf, 0, n)
+                        System.out.flush()
+                        logOut.write(buf, 0, n)
+                    }
+                }
+            }
             def exitCode = process.waitFor()
             if (exitCode != 0) {
-                throw new GradleException("NeoForge installer failed with exit code ${exitCode}")
+                throw new GradleException("NeoForge installer failed with exit code ${exitCode} (output: ${installLog})")
             }
 
             if (!versionJsonFile.exists()) {
                 throw new GradleException("NeoForge installer did not create expected version JSON: ${versionJsonFile}")
+            }
+            if (!patchedClientJar.exists()) {
+                throw new GradleException("NeoForge installer did not create patched client jar: ${patchedClientJar} (output: ${installLog})")
             }
             logger.lifecycle("  NeoForge installed successfully")
         }
