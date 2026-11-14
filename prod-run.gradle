@@ -407,6 +407,42 @@ enable-command-block=false
 """
 }
 
+// --- Helper: Move an incomplete server install aside before reinstalling ---
+// Moved instead of deleted so the partial state can be inspected. No-op when
+// the directory is missing or empty.
+ext.prodMoveAsideIncompleteInstall = { File installDir, String what, String missing ->
+    if (!installDir.exists() || installDir.list().length == 0) {
+        return
+    }
+    def stamp = new Date().format('yyyyMMdd-HHmmss')
+    def brokenDir = new File(installDir.parentFile, "${installDir.name}.broken-${stamp}")
+    logger.warn("  Incomplete ${what} detected (missing ${missing}). " +
+        "Moving ${installDir.name} to ${brokenDir.name} and reinstalling.")
+    if (!installDir.renameTo(brokenDir)) {
+        throw new GradleException("Could not move incomplete ${what} to: ${brokenDir}")
+    }
+}
+
+// --- Helper: Run an installer, echoing its output and keeping it in logFile ---
+// Returns the exit code. The log lives outside the install dir because that
+// dir is moved aside when an install turns out to be incomplete.
+ext.prodRunInstallerWithLog = { List<String> command, File logFile ->
+    logFile.parentFile.mkdirs()
+    def process = new ProcessBuilder(command.collect { it.toString() }).redirectErrorStream(true).start()
+    logFile.withOutputStream { logOut ->
+        process.inputStream.withStream { input ->
+            byte[] buf = new byte[8192]
+            int n
+            while ((n = input.read(buf)) != -1) {
+                System.out.write(buf, 0, n)
+                System.out.flush()
+                logOut.write(buf, 0, n)
+            }
+        }
+    }
+    return process.waitFor()
+}
+
 // --- Helper: Run a headless dedicated server and wait for world-creation to finish ---
 // Streams the process's stdout/stderr to logFile while watching for a vanilla
 // "Done (...)!" readiness line. Sends "stop" and waits briefly once ready;
@@ -790,7 +826,7 @@ if (project.name == 'fabric') {
     // --- Task: installFabricServerSmoke ---
     // Installs a real Fabric dedicated-server runtime (fabric-server-launch.jar +
     // vanilla server.jar) into the smoke-test directory. Idempotent: skipped once
-    // fabric-server-launch.jar already exists, so re-runs only redo the world/mods.
+    // both files exist, so re-runs only redo the world/mods.
     tasks.register('installFabricServerSmoke') {
         group = taskGroupName
         description = "Install Fabric dedicated-server runtime for prodSmokeTest (${mcVersion})"
@@ -801,10 +837,14 @@ if (project.name == 'fabric') {
         doLast {
             def installDir = prodSmokeTestDir('fabric')
             def launchJar = new File(installDir, 'fabric-server-launch.jar')
-            if (launchJar.exists()) {
+            // The installer writes fabric-server-launch.jar first and downloads
+            // server.jar last, so the launch jar alone cannot prove completion.
+            def serverJar = new File(installDir, 'server.jar')
+            if (launchJar.exists() && serverJar.exists()) {
                 logger.lifecycle("  Fabric server runtime already installed: ${mcVersion}")
                 return
             }
+            prodMoveAsideIncompleteInstall(installDir, 'Fabric server install', 'fabric-server-launch.jar or server.jar')
             installDir.mkdirs()
 
             def loaderVersion = project.findProperty('fabric_loader_version')
@@ -819,7 +859,8 @@ if (project.name == 'fabric') {
             def launcher = javaToolchains.launcherFor {
                 languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
             }.get()
-            def process = new ProcessBuilder(
+            def installLog = file("${prodCacheDir}/installers/fabric-server-install-${mcVersion}.log")
+            def exitCode = prodRunInstallerWithLog([
                 launcher.executablePath.asFile.absolutePath,
                 '-jar', installerJar.absolutePath,
                 'server',
@@ -827,13 +868,12 @@ if (project.name == 'fabric') {
                 '-loader', loaderVersion,
                 '-dir', installDir.absolutePath,
                 '-downloadMinecraft'
-            ).inheritIO().start()
-            def exitCode = process.waitFor()
+            ], installLog)
             if (exitCode != 0) {
-                throw new GradleException("Fabric server installer failed with exit code ${exitCode}")
+                throw new GradleException("Fabric server installer failed with exit code ${exitCode} (output: ${installLog})")
             }
-            if (!launchJar.exists()) {
-                throw new GradleException("Fabric server installer did not create fabric-server-launch.jar in: ${installDir}")
+            if (!launchJar.exists() || !serverJar.exists()) {
+                throw new GradleException("Fabric server installer did not create fabric-server-launch.jar and server.jar in: ${installDir} (output: ${installLog})")
             }
             logger.lifecycle("  Fabric server runtime installed successfully")
         }
@@ -1113,7 +1153,8 @@ if (project.name == 'neoforge') {
     // --- Task: installNeoForgeServerSmoke ---
     // Installs a real NeoForge dedicated-server runtime (via the installer's
     // --installServer mode) into the smoke-test directory. Idempotent: skipped
-    // once run.sh already exists, so re-runs only redo the world/mods.
+    // once run.sh and the patched server jar exist, so re-runs only redo the
+    // world/mods.
     tasks.register('installNeoForgeServerSmoke') {
         group = taskGroupName
         description = "Install NeoForge dedicated-server runtime for prodSmokeTest (${mcVersion})"
@@ -1124,10 +1165,16 @@ if (project.name == 'neoforge') {
         doLast {
             def installDir = prodSmokeTestDir('neoforge')
             def runScript = new File(installDir, 'run.sh')
-            if (runScript.exists()) {
+            // run.sh is written before the patch processors finish, so it alone
+            // cannot prove completion. The patched server jar is produced last;
+            // without it every launch fails.
+            def patchedServerJar = new File(installDir,
+                "libraries/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-server.jar")
+            if (runScript.exists() && patchedServerJar.exists()) {
                 logger.lifecycle("  NeoForge server runtime already installed: ${mcVersion}")
                 return
             }
+            prodMoveAsideIncompleteInstall(installDir, 'NeoForge server install', 'run.sh or patched server jar')
             installDir.mkdirs()
 
             def installerJar = file("${prodCacheDir}/installers/neoforge-${neoforgeVersion}-installer.jar")
@@ -1140,17 +1187,17 @@ if (project.name == 'neoforge') {
             def launcher = javaToolchains.launcherFor {
                 languageVersion = JavaLanguageVersion.of(project.findProperty('java_version'))
             }.get()
-            def process = new ProcessBuilder(
+            def installLog = file("${prodCacheDir}/installers/neoforge-${neoforgeVersion}-server-install-${mcVersion}.log")
+            def exitCode = prodRunInstallerWithLog([
                 launcher.executablePath.asFile.absolutePath,
                 '-jar', installerJar.absolutePath,
                 '--installServer', installDir.absolutePath
-            ).inheritIO().start()
-            def exitCode = process.waitFor()
+            ], installLog)
             if (exitCode != 0) {
-                throw new GradleException("NeoForge server installer failed with exit code ${exitCode}")
+                throw new GradleException("NeoForge server installer failed with exit code ${exitCode} (output: ${installLog})")
             }
-            if (!runScript.exists()) {
-                throw new GradleException("NeoForge server installer did not create run.sh in: ${installDir}")
+            if (!runScript.exists() || !patchedServerJar.exists()) {
+                throw new GradleException("NeoForge server installer did not create run.sh and the patched server jar in: ${installDir} (output: ${installLog})")
             }
             logger.lifecycle("  NeoForge server runtime installed successfully")
         }
