@@ -10,6 +10,8 @@
 //   hotfix_mc_versions     - Comma-separated "hotfix=base" pairs (e.g., "1.21.3=1.21.2")
 //   fabric_only_mc_versions - Comma-separated versions that only support Fabric (no NeoForge)
 //   build_skipped_tasks    - Comma-separated task names disabled in buildAll/build<version>
+//   buildall_run_tests     - Pass -Pbuildall_run_tests=true to keep unit tests in buildAll/build<version>
+//                            (default: tests are excluded). checkAll sets it on its buildAll step.
 
 // --- Configuration ---
 def supportedVersions = project.property('supported_mc_versions').toString().split(',').collect { it.trim() }
@@ -186,6 +188,10 @@ if (project.findProperty('multi_version_build') == 'true' && !buildSkippedTasks.
     }
 }
 
+// buildAll/build<version> exclude unit tests unless -Pbuildall_run_tests=true is given.
+// checkAll passes it so tests run inside the parallel per-version builds.
+def buildTestExclusion = project.findProperty('buildall_run_tests') == 'true' ? [] : ['-x', 'test']
+
 // Register build task for each supported version
 supportedVersions.each { version ->
     def versionSuffix = version.replace('.', '_')
@@ -203,8 +209,8 @@ supportedVersions.each { version ->
         }
 
         doLast {
-            runGradle(['clean', 'build', "-Ptarget_mc_version=${version}", '-x', 'test',
-                       '-Pmulti_version_build=true'])
+            runGradle(['clean', 'build', "-Ptarget_mc_version=${version}"] + buildTestExclusion +
+                      ['-Pmulti_version_build=true'])
         }
     }
 }
@@ -259,11 +265,11 @@ tasks.register('buildAll') {
                 def logFile = new File(logDir, "build-${version}.log")
                 try {
                     def pb = new ProcessBuilder(
-                        gradlew, 'clean', 'build',
-                        "-Ptarget_mc_version=${version}", '-x', 'test',
-                        '-Pmulti_version_build=true',
-                        '--project-cache-dir', ".gradle/build-${version}",
-                        '--no-parallel'
+                        ([gradlew, 'clean', 'build', "-Ptarget_mc_version=${version}"] +
+                         buildTestExclusion +
+                         ['-Pmulti_version_build=true',
+                          '--project-cache-dir', ".gradle/build-${version}",
+                          '--no-parallel']).collect { it.toString() } as List<String>
                     )
                     pb.directory(projectDir)
                     pb.redirectErrorStream(true)
@@ -371,81 +377,11 @@ supportedVersions.each { version ->
 }
 
 // ============================================================
-// Test Tasks
-// ============================================================
-
-/**
- * Run unit tests for all supported Minecraft versions
- * Usage: ./gradlew testAll
- *
- * Runs only common module JUnit tests (not GameTests).
- * GameTests are run separately via gameTestAll.
- *
- * Note: Hotfix versions are excluded because they share modules with their base version.
- * Running tests for the base version covers the same code used by hotfix versions.
- */
-tasks.register('testAll') {
-    group = taskGroupTest
-    description = "Run unit tests for all supported Minecraft versions (${releaseVersions.join(', ')})"
-
-    doFirst {
-        logger.lifecycle('')
-        logger.lifecycle('====================================================')
-        logger.lifecycle('Running unit tests for ALL supported Minecraft versions...')
-        logger.lifecycle("Versions: ${releaseVersions.join(', ')}")
-        if (!hotfixVersions.isEmpty()) {
-            logger.lifecycle("(${hotfixVersions.keySet().join(', ')} excluded - shares modules with base version)")
-        }
-        logger.lifecycle('====================================================')
-        logger.lifecycle('')
-    }
-
-    doLast {
-        def failed = []
-
-        releaseVersions.each { version ->
-            logger.lifecycle('')
-            logger.lifecycle(">>> Running unit tests for Minecraft ${version}...")
-            logger.lifecycle('')
-
-            try {
-                runGradle([":common-${version}:test", "-Ptarget_mc_version=${version}"])
-                logger.lifecycle("SUCCESS: Minecraft ${version}")
-            } catch (Exception e) {
-                logger.error("FAILED: Minecraft ${version}")
-                failed.add(version)
-            }
-        }
-
-        logger.lifecycle('')
-        logger.lifecycle('====================================================')
-        logger.lifecycle('Unit Test Summary:')
-        logger.lifecycle('====================================================')
-
-        if (failed.isEmpty()) {
-            logger.lifecycle('All versions passed!')
-            releaseVersions.each { version ->
-                logger.lifecycle("   - Minecraft ${version}")
-            }
-        } else {
-            logger.lifecycle("${failed.size()} version(s) failed:")
-            failed.each { version ->
-                logger.lifecycle("   - Minecraft ${version}")
-            }
-            throw new GradleException("Unit tests failed for: ${failed.join(', ')}")
-        }
-
-        logger.lifecycle('====================================================')
-        logger.lifecycle('')
-    }
-}
-
-// ============================================================
 // GameTest Tasks
 // ============================================================
 
 /**
- * Run all verification tasks: cleanAll, validateResources, validateTranslations, buildAll, testAll, gameTestAll
+ * Run all verification tasks: cleanAll, validateResources, validateTranslations, buildAll (with unit tests), gameTestAll
  * Usage: ./gradlew checkAll
  *
  * This is the comprehensive verification task that runs all checks in sequence.
@@ -453,7 +389,7 @@ tasks.register('testAll') {
  */
 tasks.register('checkAll') {
     group = taskGroupVerification
-    description = 'Run all verification tasks: cleanAll, validateResources, validateTranslations, buildAll, testAll, gameTestAll'
+    description = 'Run all verification tasks: cleanAll, validateResources, validateTranslations, buildAll (with unit tests), gameTestAll'
 
     doFirst {
         logger.lifecycle('')
@@ -484,8 +420,8 @@ tasks.register('checkAll') {
         }
 
         steps.addAll([
-            [name: 'buildAll', task: 'buildAll'],
-            [name: 'testAll', task: 'testAll'],
+            // Unit tests run inside the parallel per-version builds of buildAll
+            [name: 'buildAll', task: 'buildAll', args: ['-Pbuildall_run_tests=true']],
             [name: 'gameTestAll', task: 'gameTestAll'],
         ])
 
@@ -503,7 +439,7 @@ tasks.register('checkAll') {
             logger.lifecycle('')
 
             try {
-                runGradle([step.task])
+                runGradle([step.task] + (step.args ?: []))
                 passed.add(step.name)
                 logger.lifecycle("SUCCESS: ${step.name}")
             } catch (Exception e) {
