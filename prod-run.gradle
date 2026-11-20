@@ -1168,9 +1168,14 @@ if (project.name == 'neoforge') {
             // run.sh is written before the patch processors finish, so it alone
             // cannot prove completion. The patched server jar is produced last;
             // without it every launch fails.
-            def patchedServerJar = new File(installDir,
-                "libraries/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-server.jar")
-            if (runScript.exists() && patchedServerJar.exists()) {
+            // The installer's output layout differs by version: older ones write
+            // neoforge-<ver>-server.jar, 26.3 stable writes
+            // minecraft-server-patched-<ver>.jar instead. Accept either.
+            def patchedServerJars = [
+                new File(installDir, "libraries/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-server.jar"),
+                new File(installDir, "libraries/net/neoforged/minecraft-server-patched/${neoforgeVersion}/minecraft-server-patched-${neoforgeVersion}.jar")
+            ]
+            if (runScript.exists() && patchedServerJars.any { it.exists() }) {
                 logger.lifecycle("  NeoForge server runtime already installed: ${mcVersion}")
                 return
             }
@@ -1196,7 +1201,7 @@ if (project.name == 'neoforge') {
             if (exitCode != 0) {
                 throw new GradleException("NeoForge server installer failed with exit code ${exitCode} (output: ${installLog})")
             }
-            if (!runScript.exists() || !patchedServerJar.exists()) {
+            if (!runScript.exists() || !patchedServerJars.any { it.exists() }) {
                 throw new GradleException("NeoForge server installer did not create run.sh and the patched server jar in: ${installDir} (output: ${installLog})")
             }
             logger.lifecycle("  NeoForge server runtime installed successfully")
