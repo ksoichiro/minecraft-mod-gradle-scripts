@@ -378,6 +378,10 @@ class MultiVersionTasks {
          * Within each version group, loaders run in a single Gradle process with
          * --parallel to avoid concurrent builds of the shared common module.
          * Each subprocess uses --project-cache-dir to isolate from the outer process.
+         * It reuses buildAll's .gradle/build-<version> directory: Loom keeps the
+         * access-widened Minecraft jars (~100-200 MB per version) in the project cache,
+         * so a separate per-phase directory would store every jar twice per checkout.
+         * The phases run one after the other, so they never hold the same cache at once.
          *
          * Log files are saved to build/gametest-<version>.log for debugging.
          */
@@ -437,7 +441,7 @@ class MultiVersionTasks {
                             cmd.addAll(group.tasks)
                             cmd.addAll([
                                 '-Ptarget_mc_version=' + version,
-                                '--project-cache-dir', '.gradle/gametest-' + version,
+                                '--project-cache-dir', '.gradle/build-' + version,
                                 '--parallel',
                                 '--stacktrace'
                             ])
