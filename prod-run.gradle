@@ -517,6 +517,8 @@ ext.PROD_SMOKE_DEFAULT_LOG_IGNORES = [
     /FMLConfig.*is not correct\. Correcting/,
     // Vanilla logs this for every modded entity type on older versions
     /No data fixer registered for /,
+    // OSHI may not yet know the codename of a newer macOS host
+    /\[[^\]]*\/WARN\](?: \[os\.so\.os\.ma\.MacOperatingSystem\/\])?: Unable to parse version [0-9.]+ to a codename\.$/,
 ]
 
 // --- Helper: Fail on unexpected WARN/ERROR/FATAL lines in a smoke-test log ---
