@@ -964,9 +964,14 @@ if (project.name == 'neoforge') {
             // cannot prove completion. The patched client jar is produced by a
             // late processor; if it is missing the install was interrupted and
             // every later launch fails with "minecraft ... [MISSING]".
-            def patchedClientJar = new File(neoforgeInstallDir,
-                "libraries/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-client.jar")
-            if (versionJsonFile.exists() && patchedClientJar.exists()) {
+            // The installer's output layout differs by version: older ones write
+            // neoforge-<ver>-client.jar, 26.3 stable writes
+            // minecraft-client-patched-<ver>.jar instead. Accept either.
+            def patchedClientJars = [
+                new File(neoforgeInstallDir, "libraries/net/neoforged/neoforge/${neoforgeVersion}/neoforge-${neoforgeVersion}-client.jar"),
+                new File(neoforgeInstallDir, "libraries/net/neoforged/minecraft-client-patched/${neoforgeVersion}/minecraft-client-patched-${neoforgeVersion}.jar")
+            ]
+            if (versionJsonFile.exists() && patchedClientJars.any { it.exists() }) {
                 logger.lifecycle("  NeoForge already installed: ${neoforgeVersionId}")
                 return
             }
@@ -1048,8 +1053,8 @@ if (project.name == 'neoforge') {
             if (!versionJsonFile.exists()) {
                 throw new GradleException("NeoForge installer did not create expected version JSON: ${versionJsonFile}")
             }
-            if (!patchedClientJar.exists()) {
-                throw new GradleException("NeoForge installer did not create patched client jar: ${patchedClientJar} (output: ${installLog})")
+            if (!patchedClientJars.any { it.exists() }) {
+                throw new GradleException("NeoForge installer did not create a patched client jar (looked for ${patchedClientJars.join(', ')}, output: ${installLog})")
             }
             logger.lifecycle("  NeoForge installed successfully")
         }
