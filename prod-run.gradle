@@ -45,8 +45,10 @@ def taskGroupName = (project.findProperty('release_project_name') ?: project.nam
 // Downloads to a unique temporary file and renames it into place, so an
 // interrupted download or another checkout sharing prod_cache_dir never sees
 // a partial file at dest (which the exists() check would then trust forever).
-ext.prodDownloadFile = { String url, File dest ->
-    if (dest.exists()) return
+// Pass force=true to replace an existing file (the old file stays in place if
+// the download fails).
+ext.prodDownloadFile = { String url, File dest, boolean force = false ->
+    if (dest.exists() && !force) return
     dest.parentFile.mkdirs()
     logger.lifecycle("  Downloading: ${dest.name}")
     def tmp = File.createTempFile("${dest.name}.", '.part', dest.parentFile)
@@ -91,13 +93,24 @@ ext.prodIsLibraryAllowed = { lib ->
 // --- Helper: Parse and cache Mojang version JSON ---
 ext.prodGetVersionJson = { String version ->
     def manifestFile = file("${prodCacheDir}/manifest/version_manifest_v2.json")
-    prodDownloadFile('https://piston-meta.mojang.com/mc/game/version_manifest_v2.json', manifestFile)
+    def manifestUrl = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json'
+    prodDownloadFile(manifestUrl, manifestFile)
 
     def manifest = new JsonSlurper().parse(manifestFile)
     def versionEntry = manifest.versions.find { it.id == version }
     if (!versionEntry) {
-        throw new GradleException("Minecraft version ${version} not found in Mojang manifest. " +
-            "Delete ${manifestFile} to refresh.")
+        // The cached manifest may predate this version (a shared prod_cache_dir
+        // keeps it forever). Refetch once; the atomic replace in prodDownloadFile
+        // keeps concurrent checkouts from reading a partial file, and a failed
+        // fetch (offline) leaves the cached manifest untouched.
+        logger.lifecycle("  Minecraft ${version} not in cached manifest, refreshing it")
+        prodDownloadFile(manifestUrl, manifestFile, true)
+        manifest = new JsonSlurper().parse(manifestFile)
+        versionEntry = manifest.versions.find { it.id == version }
+    }
+    if (!versionEntry) {
+        throw new GradleException("Minecraft version ${version} not found in Mojang manifest " +
+            "(${manifestFile}), even after refreshing it from ${manifestUrl}.")
     }
 
     def versionFile = file("${prodCacheDir}/versions/${version}.json")
