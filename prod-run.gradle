@@ -13,6 +13,11 @@
 //
 // Optional project properties:
 //   prod_base_dir        - Base directory for production run files (default: ${rootDir}/run-prod)
+//   prod_cache_dir       - Directory for downloaded files only: Minecraft client, libraries,
+//                          assets, loader installers and installed loader runtimes
+//                          (default: ${prod_base_dir}/cache). Point several checkouts at one
+//                          absolute path to share downloads while each keeps its own
+//                          ${prod_base_dir}/instances (mods and worlds)
 //   release_project_name - Project display name for task groups (defaults to project.name)
 //   prod_smoke_log_check - When true, prodSmokeTest also fails if the server log contains
 //                          a WARN/ERROR/FATAL line not matched by an ignore pattern (default: false)
@@ -31,17 +36,28 @@ import groovy.json.JsonSlurper
 
 // --- Configuration ---
 def prodBaseDir = project.findProperty('prod_base_dir') ?: "${rootDir}/run-prod"
-def prodCacheDir = "${prodBaseDir}/cache"
+def prodCacheDir = project.findProperty('prod_cache_dir') ?: "${prodBaseDir}/cache"
 def mcVersion = project.findProperty('minecraft_version')
 def taskGroupName = (project.findProperty('release_project_name') ?: project.name).toString().toLowerCase() + ' prod'
 
 // --- Helper: Download file with caching ---
-// Skips download if file already exists. Delete run-prod/cache/ to force re-download.
+// Skips download if file already exists. Delete prodCacheDir to force re-download.
+// Downloads to a unique temporary file and renames it into place, so an
+// interrupted download or another checkout sharing prod_cache_dir never sees
+// a partial file at dest (which the exists() check would then trust forever).
 ext.prodDownloadFile = { String url, File dest ->
     if (dest.exists()) return
     dest.parentFile.mkdirs()
     logger.lifecycle("  Downloading: ${dest.name}")
-    ant.get(src: url, dest: dest, verbose: false)
+    def tmp = File.createTempFile("${dest.name}.", '.part', dest.parentFile)
+    try {
+        ant.get(src: url, dest: tmp, verbose: false)
+        java.nio.file.Files.move(tmp.toPath(), dest.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            java.nio.file.StandardCopyOption.ATOMIC_MOVE)
+    } finally {
+        tmp.delete()
+    }
 }
 
 // --- Helper: Get current OS name for Mojang manifest rules ---
@@ -582,7 +598,7 @@ ext.prodExportClientCommandIfRequested = { JavaExec task ->
 // ============================================================
 // Task: downloadMinecraft
 // Downloads vanilla client JAR, libraries, and assets.
-// All files are cached in run-prod/cache/.
+// All files are cached in prodCacheDir (default: run-prod/cache/).
 // ============================================================
 tasks.register('downloadMinecraft') {
     group = taskGroupName
