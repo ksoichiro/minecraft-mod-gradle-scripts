@@ -158,6 +158,13 @@ build_skipped_tasks=runGameTest,sourcesJar,remapSourcesJar
 # Base directory for production run files (default: ${rootDir}/run-prod)
 prod_base_dir=${rootDir}/run-prod
 
+# Directory for downloaded production runtime files only (Minecraft client,
+# libraries, assets, loader installers). Default: ${prod_base_dir}/cache.
+# Set the same absolute path in several checkouts to share downloads while
+# ${prod_base_dir}/instances (mods and worlds) stays per checkout.
+# Warm it from one checkout first: concurrent first-time downloads can race.
+# prod_cache_dir=/absolute/path/to/prod-cache
+
 # Make prodSmokeTest also fail on WARN/ERROR/FATAL server log lines that no
 # ignore pattern matches (default: false). Noise caused by the smoke-test
 # harness itself (offline mode banner, etc.) is always ignored.
